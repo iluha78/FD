@@ -11,7 +11,11 @@
 
 # Models (large files)
 /models/*.onnx
-/scripts/models
+# binaries / models
+*.onnx
+*.tar.gz
+
+scripts/models/
 # Environment
 .env
 

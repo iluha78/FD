@@ -11,7 +11,7 @@ import (
 func ResolveYouTubeURL(ctx context.Context, youtubeURL string) (string, error) {
 	cmd := exec.CommandContext(ctx, "yt-dlp",
 		"--get-url",
-		"--format", "best[height<=720]",
+		"--format", "best[height<=1080]",
 		"--no-playlist",
 		youtubeURL,
 	)
@@ -21,7 +21,10 @@ func ResolveYouTubeURL(ctx context.Context, youtubeURL string) (string, error) {
 		return "", fmt.Errorf("yt-dlp failed: %w", err)
 	}
 
-	url := strings.TrimSpace(string(output))
+	// yt-dlp may return multiple lines (video + audio URLs); use only the first
+	raw := strings.TrimSpace(string(output))
+	url := strings.SplitN(raw, "\n", 2)[0]
+	url = strings.TrimSpace(url)
 	if url == "" {
 		return "", fmt.Errorf("yt-dlp returned empty URL")
 	}

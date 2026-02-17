@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 )
 
 // FrameCallback is called for each extracted JPEG frame.
@@ -35,14 +37,32 @@ func (f *FFmpegExtractor) StartExtraction(ctx context.Context, streamURL string,
 	args := []string{
 		"-hide_banner",
 		"-loglevel", "warning",
-		"-rtsp_transport", "tcp",
+	}
+
+	// Add protocol-specific timeout/reconnect args
+	if strings.HasPrefix(streamURL, "rtsp://") || strings.HasPrefix(streamURL, "rtsps://") {
+		args = append(args,
+			"-rtsp_transport", "tcp",
+			"-stimeout", "5000000",  // 5s RTSP socket timeout (microseconds)
+			"-timeout", "5000000",   // 5s overall timeout (microseconds)
+		)
+	} else if strings.HasPrefix(streamURL, "http://") || strings.HasPrefix(streamURL, "https://") {
+		args = append(args,
+			"-reconnect", "1",
+			"-reconnect_streamed", "1",
+			"-reconnect_delay_max", "5",
+			"-timeout", "10000000", // 10s (microseconds)
+		)
+	}
+
+	args = append(args,
 		"-i", streamURL,
 		"-vf", fmt.Sprintf("fps=%d,scale=%d:-1", fps, width),
 		"-f", "image2pipe",
 		"-vcodec", "mjpeg",
 		"-q:v", "5",
 		"pipe:1",
-	}
+	)
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	f.mu.Lock()
@@ -67,13 +87,12 @@ func (f *FFmpegExtractor) StartExtraction(ctx context.Context, streamURL string,
 	go func() {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
-			slog.Debug("ffmpeg", "output", scanner.Text())
+			slog.Warn("ffmpeg stderr", "output", scanner.Text())
 		}
 	}()
 
 	// Read JPEG frames from stdout
-	// JPEG frames start with FFD8 and end with FFD9
-	if err := readJPEGFrames(stdout, callback); err != nil {
+	if err := readJPEGFrames(ctx, stdout, callback); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -97,22 +116,46 @@ func (f *FFmpegExtractor) Stop() {
 }
 
 // readJPEGFrames reads a stream of concatenated JPEG images.
-func readJPEGFrames(r io.Reader, callback FrameCallback) error {
+// Tolerates initial EOF while ffmpeg is still connecting (up to 5 seconds).
+func readJPEGFrames(ctx context.Context, r io.Reader, callback FrameCallback) error {
 	reader := bufio.NewReaderSize(r, 512*1024) // 512KB buffer
+	framesRead := 0
+	const maxStartupRetries = 50 // 50 * 100ms = 5s max wait for first frame
+	startupRetries := 0
 
 	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		// Find JPEG start marker: FF D8
-		if err := findJPEGStart(reader); err != nil {
+		err := findJPEGStart(reader)
+		if err != nil {
+			if err == io.EOF {
+				if framesRead == 0 && startupRetries < maxStartupRetries {
+					startupRetries++
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+				if framesRead > 0 {
+					return nil // stream ended normally after producing frames
+				}
+				return fmt.Errorf("no frames received from ffmpeg (waited %.1fs)", float64(startupRetries)*0.1)
+			}
 			return err
 		}
 
 		// Read until JPEG end marker: FF D9
 		frameData, err := readUntilJPEGEnd(reader)
 		if err != nil {
+			if err == io.EOF && framesRead > 0 {
+				return nil // stream ended mid-frame; treat as normal end
+			}
 			return err
 		}
 
 		if len(frameData) > 0 {
+			framesRead++
 			if err := callback(frameData); err != nil {
 				slog.Warn("frame callback error", "error", err)
 			}

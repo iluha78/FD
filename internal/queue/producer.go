@@ -42,6 +42,7 @@ func NewProducer(natsURL string) (*Producer, error) {
 }
 
 // EnsureStreams creates JetStream streams if they don't exist.
+// Retries up to 30 times (1s apart) to handle NATS startup delay.
 func (p *Producer) EnsureStreams(ctx context.Context) error {
 	streams := []jetstream.StreamConfig{
 		{
@@ -67,14 +68,32 @@ func (p *Producer) EnsureStreams(ctx context.Context) error {
 		},
 	}
 
-	for _, cfg := range streams {
-		_, err := p.js.CreateOrUpdateStream(ctx, cfg)
-		if err != nil {
-			return fmt.Errorf("create stream %s: %w", cfg.Name, err)
+	const maxAttempts = 30
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		allOK := true
+		for _, cfg := range streams {
+			opCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			_, err := p.js.CreateOrUpdateStream(opCtx, cfg)
+			cancel()
+			if err != nil {
+				allOK = false
+				if attempt == maxAttempts {
+					return fmt.Errorf("create stream %s: %w (after %d attempts)", cfg.Name, err, maxAttempts)
+				}
+				slog.Warn("ensure NATS stream (retrying...)", "name", cfg.Name, "attempt", attempt, "error", err)
+				break
+			}
+			slog.Info("ensured NATS stream", "name", cfg.Name)
 		}
-		slog.Info("ensured NATS stream", "name", cfg.Name)
+		if allOK {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(1 * time.Second):
+		}
 	}
-
 	return nil
 }
 

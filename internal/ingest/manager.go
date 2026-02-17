@@ -108,7 +108,7 @@ func (m *Manager) startStream(ctx context.Context, cmd StreamCommand) error {
 
 	slog.Info("starting stream ingestion", "stream_id", cmd.StreamID, "url", cmd.URL, "fps", fps)
 
-	// Run extraction in a goroutine
+	// Run extraction in a goroutine with retry logic
 	go func() {
 		defer func() {
 			m.mu.Lock()
@@ -118,40 +118,81 @@ func (m *Manager) startStream(ctx context.Context, cmd StreamCommand) error {
 			slog.Info("stream ingestion stopped", "stream_id", cmd.StreamID)
 		}()
 
-		err := extractor.StartExtraction(streamCtx, streamURL, fps, m.width, func(frameData []byte) error {
-			frameID := uuid.New()
-			streamUUID, _ := uuid.Parse(cmd.StreamID)
+		const maxRetries = 3
+		currentURL := streamURL
 
-			// Upload frame to MinIO
-			key := fmt.Sprintf("frames/%s/%s.jpg", cmd.StreamID, frameID.String())
-			if err := m.minio.PutObject(streamCtx, key, frameData, "image/jpeg"); err != nil {
-				return fmt.Errorf("upload frame: %w", err)
+		for attempt := 0; attempt <= maxRetries; attempt++ {
+			if attempt > 0 {
+				delay := time.Duration(1<<uint(attempt)) * time.Second // 2s, 4s, 8s
+				slog.Warn("retrying stream extraction",
+					"stream_id", cmd.StreamID,
+					"attempt", attempt,
+					"delay", delay,
+				)
+				select {
+				case <-streamCtx.Done():
+					m.updateStatus(cmd.StreamID, models.StreamStatusStopped, "")
+					return
+				case <-time.After(delay):
+				}
+
+				// Re-resolve YouTube URLs (they expire)
+				if cmd.Type == "youtube" {
+					resolved, err := ResolveYouTubeURL(streamCtx, cmd.URL)
+					if err != nil {
+						slog.Warn("youtube re-resolve failed", "stream_id", cmd.StreamID, "error", err)
+						continue
+					}
+					currentURL = resolved
+				}
+
+				// Need a fresh extractor for retry
+				extractor = &FFmpegExtractor{}
 			}
 
-			// Publish frame task to NATS
-			task := models.FrameTask{
-				StreamID:  streamUUID,
-				FrameID:   frameID,
-				Timestamp: time.Now(),
-				FrameRef:  key,
-				Width:     m.width,
-				Height:    0, // Will be determined by worker
+			err := extractor.StartExtraction(streamCtx, currentURL, fps, m.width, func(frameData []byte) error {
+				frameID := uuid.New()
+				streamUUID, _ := uuid.Parse(cmd.StreamID)
+
+				// Upload frame to MinIO
+				key := fmt.Sprintf("frames/%s/%s.jpg", cmd.StreamID, frameID.String())
+				if err := m.minio.PutObject(streamCtx, key, frameData, "image/jpeg"); err != nil {
+					return fmt.Errorf("upload frame: %w", err)
+				}
+
+				// Publish frame task to NATS
+				task := models.FrameTask{
+					StreamID:  streamUUID,
+					FrameID:   frameID,
+					Timestamp: time.Now(),
+					FrameRef:  key,
+					Width:     m.width,
+					Height:    0, // Will be determined by worker
+				}
+
+				if err := m.producer.PublishFrame(streamCtx, cmd.StreamID, task); err != nil {
+					return fmt.Errorf("publish frame task: %w", err)
+				}
+
+				observability.FramesProcessed.WithLabelValues(cmd.StreamID).Inc()
+				return nil
+			})
+
+			if err == nil || streamCtx.Err() != nil {
+				// Clean exit or context cancelled (user stopped stream)
+				m.updateStatus(cmd.StreamID, models.StreamStatusStopped, "")
+				return
 			}
 
-			if err := m.producer.PublishFrame(streamCtx, cmd.StreamID, task); err != nil {
-				return fmt.Errorf("publish frame task: %w", err)
-			}
-
-			observability.FramesProcessed.WithLabelValues(cmd.StreamID).Inc()
-			return nil
-		})
-
-		if err != nil && streamCtx.Err() == nil {
-			slog.Error("stream extraction failed", "stream_id", cmd.StreamID, "error", err)
-			m.updateStatus(cmd.StreamID, models.StreamStatusError, err.Error())
-		} else {
-			m.updateStatus(cmd.StreamID, models.StreamStatusStopped, "")
+			slog.Error("stream extraction failed",
+				"stream_id", cmd.StreamID,
+				"attempt", attempt,
+				"error", err,
+			)
 		}
+
+		// All retries exhausted
+		m.updateStatus(cmd.StreamID, models.StreamStatusError, "stream failed after retries")
 	}()
 
 	return nil

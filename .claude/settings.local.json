@@ -29,7 +29,9 @@
       "Bash(pip install:*)",
       "Bash(pip3 install:*)",
       "Bash(winget install:*)",
-      "Bash(docker ps -a --filter \"name=nats\" --format \"table {{.Names}}\\\\t{{.Status}}\\\\t{{.Ports}}\")"
+      "Bash(docker ps -a --filter \"name=nats\" --format \"table {{.Names}}\\\\t{{.Status}}\\\\t{{.Ports}}\")",
+      "Bash(python:*)",
+      "Bash(dir:*)"
     ]
   }
 }

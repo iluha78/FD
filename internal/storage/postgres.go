@@ -400,3 +400,18 @@ func (s *PostgresStore) QueryEvents(ctx context.Context, streamID uuid.UUID, fro
 	}
 	return events, total, nil
 }
+
+// GetEvent returns a single event by ID.
+func (s *PostgresStore) GetEvent(ctx context.Context, id uuid.UUID) (*models.Event, error) {
+	var ev models.Event
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, stream_id, track_id, timestamp, gender, gender_confidence, age, age_range, confidence, matched_person_id, match_score, snapshot_key, created_at
+		 FROM events WHERE id = $1`, id).
+		Scan(&ev.ID, &ev.StreamID, &ev.TrackID, &ev.Timestamp,
+			&ev.Gender, &ev.GenderConfidence, &ev.Age, &ev.AgeRange, &ev.Confidence,
+			&ev.MatchedPersonID, &ev.MatchScore, &ev.SnapshotKey, &ev.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("get event: %w", err)
+	}
+	return &ev, nil
+}

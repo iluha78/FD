@@ -89,26 +89,24 @@ func (h *EventHandler) List(c *gin.Context) {
 
 // Snapshot proxies the face snapshot image from MinIO.
 func (h *EventHandler) Snapshot(c *gin.Context) {
-	// We need the snapshot key, which requires looking up the event.
-	// For simplicity, accept the snapshot key as a query param or look it up by event ID.
 	eventID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid event id"})
 		return
 	}
 
-	// We need to query the event to get the snapshot key.
-	// This is a simple approach — in production you might cache this.
-	_ = eventID // The event lookup would go here once we have a GetEvent method.
-
-	// For now, use the key from the query param as a fallback.
-	key := c.Query("key")
-	if key == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "snapshot key required"})
+	ev, err := h.db.GetEvent(c.Request.Context(), eventID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "event not found"})
 		return
 	}
 
-	data, err := h.minio.GetObject(c.Request.Context(), key)
+	if ev.SnapshotKey == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no snapshot for this event"})
+		return
+	}
+
+	data, err := h.minio.GetObject(c.Request.Context(), ev.SnapshotKey)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "snapshot not found"})
 		return

@@ -27,7 +27,7 @@ vision:
   default_fps: 5
   max_fps: 10
   worker_count: 6
-  frame_width: 640
+  frame_width: 1280
 
 tracking:
   max_age: 30

@@ -2,6 +2,7 @@ package vision
 
 import (
 	"fmt"
+	"math"
 
 	ort "github.com/yalue/onnxruntime_go"
 )
@@ -34,7 +35,7 @@ func NewAttributePredictor(modelPath string) (*AttributePredictor, error) {
 		return nil, fmt.Errorf("create input tensor: %w", err)
 	}
 
-	// Output: [1, 3] — [gender_prob, age_value, ...]
+	// Output: [1, 3] — [female_logit, male_logit, age_normalized]
 	outputShape := ort.NewShape(1, 3)
 	outputTensor, err := ort.NewEmptyTensor[float32](outputShape)
 	if err != nil {
@@ -78,18 +79,28 @@ func (p *AttributePredictor) Predict(faceData []float32) (*GenderAge, error) {
 		return nil, fmt.Errorf("unexpected output size: %d", len(data))
 	}
 
-	// InsightFace genderage output: [gender_score, age_raw, ...]
-	genderScore := data[0]
-	ageRaw := data[1]
+	// InsightFace genderage fc1 output = [female_logit, male_logit, age_normalized]
+	// fc1 is Concat of fullyconnected0 (gender, 2 classes) + fullyconnected1 (age, 1 value)
+	femaleLogit := data[0]
+	maleLogit := data[1]
+	ageNorm := data[2]
 
+	// Gender: argmax of first 2 logits
 	gender := "female"
-	genderConf := 1 - genderScore
-	if genderScore > 0.5 {
+	if maleLogit > femaleLogit {
 		gender = "male"
-		genderConf = genderScore
 	}
 
-	age := int(ageRaw)
+	// Confidence: softmax probability of the predicted class
+	// softmax(male) = 1 / (1 + exp(-(male - female)))
+	maleProbability := float32(1.0 / (1.0 + math.Exp(float64(-(maleLogit - femaleLogit)))))
+	genderConf := maleProbability
+	if gender == "female" {
+		genderConf = 1 - maleProbability
+	}
+
+	// Age: multiply by 100 to recover real age (InsightFace normalizes age/100 during training)
+	age := int(math.Round(float64(ageNorm) * 100))
 	if age < 0 {
 		age = 0
 	}
