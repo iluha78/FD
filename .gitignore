@@ -1,0 +1,35 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/bin/
+
+# Go
+/vendor/
+
+# Models (large files)
+/models/*.onnx
+/scripts/models
+# Environment
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Data
+/data/
+/tmp/
+
+# Docker volumes
+/volumes/
+
+nul

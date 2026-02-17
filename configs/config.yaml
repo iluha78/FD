@@ -1,0 +1,39 @@
+server:
+  port: 8080
+  api_key: "changeme"
+
+database:
+  host: localhost
+  port: 5432
+  name: fd
+  user: fd
+  password: fd
+  max_conns: 20
+
+nats:
+  url: nats://localhost:4222
+
+minio:
+  endpoint: localhost:9000
+  access_key: minioadmin
+  secret_key: minioadmin
+  bucket: fd-frames
+  use_ssl: false
+
+vision:
+  models_dir: ./models
+  detection_threshold: 0.5
+  recognition_threshold: 0.4
+  default_fps: 5
+  max_fps: 10
+  worker_count: 6
+  frame_width: 640
+
+tracking:
+  max_age: 30
+  min_hits: 3
+  re_recognize_interval: 3s
+
+logging:
+  level: info
+  format: json

@@ -1,0 +1,41 @@
+FROM golang:1.23-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/worker ./cmd/worker
+
+# ---
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install ONNX Runtime
+ARG ONNXRUNTIME_VERSION=1.17.1
+RUN wget -q "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz" \
+    -O /tmp/ort.tgz \
+    && tar -xzf /tmp/ort.tgz -C /opt \
+    && rm /tmp/ort.tgz \
+    && ln -s /opt/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}/lib/libonnxruntime.so /usr/lib/libonnxruntime.so \
+    && ldconfig
+
+COPY --from=builder /bin/worker /usr/local/bin/worker
+COPY configs/config.yaml /etc/fd/config.yaml
+
+# Models directory — mount or COPY your models here
+RUN mkdir -p /models
+ENV FD_MODELS_DIR=/models
+
+EXPOSE 8082
+
+ENTRYPOINT ["worker"]
+CMD ["-config", "/etc/fd/config.yaml"]

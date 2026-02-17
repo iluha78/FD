@@ -1,0 +1,634 @@
+openapi: 3.1.0
+info:
+  title: FD — Face Detection & Recognition Service
+  description: |
+    Production-ready REST API for real-time face detection, recognition,
+    gender/age prediction from video streams (RTSP, YouTube, HTTP).
+  version: 1.0.0
+  contact:
+    name: FD Team
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - ApiKeyAuth: []
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    Collection:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    CreateCollection:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+      required: [name]
+
+    Person:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        collection_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        metadata:
+          type: object
+        face_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    CreatePerson:
+      type: object
+      properties:
+        collection_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        metadata:
+          type: object
+      required: [collection_id, name]
+
+    FaceEmbedding:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        person_id:
+          type: string
+          format: uuid
+        quality:
+          type: number
+          format: float
+        source_key:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Stream:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        url:
+          type: string
+        stream_type:
+          type: string
+          enum: [rtsp, youtube, http]
+        mode:
+          type: string
+          enum: [all, identify]
+        fps:
+          type: integer
+        status:
+          type: string
+          enum: [stopped, starting, running, error]
+        collection_id:
+          type: string
+          format: uuid
+          nullable: true
+        config:
+          type: object
+        error_message:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateStream:
+      type: object
+      properties:
+        url:
+          type: string
+          description: "Video source URL (RTSP, YouTube, HTTP)"
+        stream_type:
+          type: string
+          enum: [rtsp, youtube, http]
+        mode:
+          type: string
+          enum: [all, identify]
+          description: "'all' detects all faces, 'identify' also matches against face DB"
+        fps:
+          type: integer
+          default: 5
+          description: "Frames per second to process (1-10)"
+        collection_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: "Face collection to match against (required if mode=identify)"
+        config:
+          type: object
+      required: [url, stream_type, mode]
+
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        stream_id:
+          type: string
+          format: uuid
+        track_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        gender:
+          type: string
+          enum: [male, female, ""]
+        gender_confidence:
+          type: number
+          format: float
+        age:
+          type: integer
+        age_range:
+          type: string
+          description: "e.g. '30-35'"
+        confidence:
+          type: number
+          format: float
+        matched_person_id:
+          type: string
+          format: uuid
+          nullable: true
+        matched_name:
+          type: string
+        match_score:
+          type: number
+          format: float
+        snapshot_url:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    SearchResult:
+      type: object
+      properties:
+        person_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        score:
+          type: number
+          format: float
+
+    WSEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [face_detected, face_recognized, stream_status]
+        stream_id:
+          type: string
+          format: uuid
+        data:
+          $ref: '#/components/schemas/Event'
+        status:
+          type: string
+
+paths:
+  /healthz:
+    get:
+      tags: [System]
+      summary: Liveness check
+      security: []
+      responses:
+        '200':
+          description: Service is alive
+
+  /readyz:
+    get:
+      tags: [System]
+      summary: Readiness check (DB, NATS, MinIO)
+      security: []
+      responses:
+        '200':
+          description: All dependencies ready
+        '503':
+          description: Some dependencies not ready
+
+  /metrics:
+    get:
+      tags: [System]
+      summary: Prometheus metrics
+      security: []
+      responses:
+        '200':
+          description: Prometheus metrics output
+
+  /v1/ws:
+    get:
+      tags: [WebSocket]
+      summary: Real-time event stream via WebSocket
+      description: |
+        Connect via WebSocket to receive real-time face detection events.
+        Optionally filter by stream_id query parameter.
+      parameters:
+        - name: stream_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Filter events to a specific stream
+      responses:
+        '101':
+          description: WebSocket upgrade
+
+  /v1/collections:
+    post:
+      tags: [Collections]
+      summary: Create a face collection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCollection'
+      responses:
+        '201':
+          description: Collection created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Collection'
+    get:
+      tags: [Collections]
+      summary: List all collections
+      responses:
+        '200':
+          description: List of collections
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  collections:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Collection'
+                  total:
+                    type: integer
+
+  /v1/persons:
+    post:
+      tags: [Persons]
+      summary: Create a person
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePerson'
+      responses:
+        '201':
+          description: Person created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Person'
+
+  /v1/persons/{id}:
+    get:
+      tags: [Persons]
+      summary: Get person details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Person details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Person'
+        '404':
+          description: Not found
+
+  /v1/persons/{id}/faces:
+    post:
+      tags: [Persons]
+      summary: Upload a face image to extract embedding
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                image:
+                  type: string
+                  format: binary
+              required: [image]
+      responses:
+        '201':
+          description: Face added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FaceEmbedding'
+        '422':
+          description: No face detected in image
+    get:
+      tags: [Persons]
+      summary: List face embeddings for a person
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of face embeddings
+
+  /v1/persons/{id}/faces/{faceId}:
+    delete:
+      tags: [Persons]
+      summary: Delete a face embedding
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: faceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Face deleted
+
+  /v1/search:
+    post:
+      tags: [Search]
+      summary: Search for matching persons by face image
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                image:
+                  type: string
+                  format: binary
+                collection_id:
+                  type: string
+                  format: uuid
+              required: [image]
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SearchResult'
+                  total:
+                    type: integer
+
+  /v1/streams:
+    post:
+      tags: [Streams]
+      summary: Create a video stream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStream'
+      responses:
+        '201':
+          description: Stream created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stream'
+    get:
+      tags: [Streams]
+      summary: List all streams
+      responses:
+        '200':
+          description: List of streams
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  streams:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Stream'
+                  total:
+                    type: integer
+
+  /v1/streams/{id}:
+    get:
+      tags: [Streams]
+      summary: Get stream details and status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Stream details
+        '404':
+          description: Not found
+    delete:
+      tags: [Streams]
+      summary: Delete a stream (stops if running)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Stream deleted
+
+  /v1/streams/{id}/start:
+    post:
+      tags: [Streams]
+      summary: Start processing a stream
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Stream starting
+        '409':
+          description: Stream already running
+
+  /v1/streams/{id}/stop:
+    post:
+      tags: [Streams]
+      summary: Stop processing a stream
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Stream stopped
+
+  /v1/streams/{id}/events:
+    get:
+      tags: [Events]
+      summary: Query detection events for a stream
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: person_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: unknown
+          in: query
+          schema:
+            type: boolean
+          description: "true = only unrecognized faces"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Event list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Event'
+                  total:
+                    type: integer
+
+  /v1/events/{id}/snapshot:
+    get:
+      tags: [Events]
+      summary: Get face snapshot image
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: key
+          in: query
+          required: true
+          schema:
+            type: string
+          description: MinIO object key
+      responses:
+        '200':
+          description: JPEG image
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Snapshot not found

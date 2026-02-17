@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod init:*)",
+      "Bash(where go:*)",
+      "Bash(cmd /c \"where go 2>nul || echo Go not found\")",
+      "Bash(cmd /c \"dir \"\"C:\\\\Program Files\\\\Go\"\" 2>nul && echo FOUND || echo NOT FOUND\")",
+      "Bash(cmd /c \"dir \"\"C:\\\\Go\"\" 2>nul && echo FOUND || echo NOT FOUND\")",
+      "Bash(cmd /c \"winget --version 2>nul && echo WINGET_OK || echo WINGET_NOT_FOUND\")",
+      "Bash(cmd /c \"winget --version\")",
+      "Bash(powershell -Command \"winget --version\")",
+      "Bash(powershell -Command:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(go env:*)",
+      "Bash(cmd /c \"go env CGO_ENABLED GOOS GOARCH CC\")",
+      "Bash(cmd /c \"gcc --version\")",
+      "Bash(cmd /c \"go version\")",
+      "Bash(cmd /c \"go env CGO_ENABLED && go env GOOS && go env GOARCH && go env CC && go version\")",
+      "Bash(powershell:*)",
+      "Bash(go build:*)",
+      "Bash(where:*)",
+      "Bash(tr:*)",
+      "Bash(export PATH:*)",
+      "Bash(export CGO_ENABLED=1:*)",
+      "Bash(gcc:*)",
+      "Bash(bash:*)",
+      "Bash(python3:*)",
+      "Bash(pip install:*)",
+      "Bash(pip3 install:*)",
+      "Bash(winget install:*)",
+      "Bash(docker ps -a --filter \"name=nats\" --format \"table {{.Names}}\\\\t{{.Status}}\\\\t{{.Ports}}\")"
+    ]
+  }
+}
