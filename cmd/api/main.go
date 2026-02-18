@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -207,9 +208,16 @@ func main() {
 }
 
 // getONNXLibPath returns the ONNX Runtime shared library path.
+// On Windows, first checks next to the executable (bin/onnxruntime.dll).
 func getONNXLibPath() string {
 	switch runtime.GOOS {
 	case "windows":
+		if exe, err := os.Executable(); err == nil {
+			local := filepath.Join(filepath.Dir(exe), "onnxruntime.dll")
+			if _, err := os.Stat(local); err == nil {
+				return local
+			}
+		}
 		return "onnxruntime.dll"
 	case "linux":
 		return "libonnxruntime.so"
