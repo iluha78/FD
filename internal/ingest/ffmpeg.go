@@ -43,8 +43,7 @@ func (f *FFmpegExtractor) StartExtraction(ctx context.Context, streamURL string,
 	if strings.HasPrefix(streamURL, "rtsp://") || strings.HasPrefix(streamURL, "rtsps://") {
 		args = append(args,
 			"-rtsp_transport", "tcp",
-			"-stimeout", "5000000",  // 5s RTSP socket timeout (microseconds)
-			"-timeout", "5000000",   // 5s overall timeout (microseconds)
+			"-timeout", "10000000", // 10s socket I/O timeout (microseconds, RTSP demuxer option)
 		)
 	} else if strings.HasPrefix(streamURL, "http://") || strings.HasPrefix(streamURL, "https://") {
 		args = append(args,

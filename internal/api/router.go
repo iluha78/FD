@@ -52,6 +52,7 @@ func NewRouter(cfg RouterConfig) *gin.Engine {
 	personH := handlers.NewPersonHandler(cfg.DB, cfg.MinIO)
 	personH.EmbedFn = cfg.EmbedFn
 	v1.POST("/persons", personH.Create)
+	v1.GET("/persons", personH.List)
 	v1.GET("/persons/:id", personH.Get)
 	v1.POST("/persons/:id/faces", personH.AddFace)
 	v1.GET("/persons/:id/faces", personH.ListFaces)

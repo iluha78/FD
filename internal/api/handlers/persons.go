@@ -57,6 +57,39 @@ func (h *PersonHandler) Create(c *gin.Context) {
 	})
 }
 
+func (h *PersonHandler) List(c *gin.Context) {
+	var collectionID *uuid.UUID
+	if colStr := c.Query("collection_id"); colStr != "" {
+		id, err := uuid.Parse(colStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid collection_id"})
+			return
+		}
+		collectionID = &id
+	}
+
+	persons, err := h.db.ListPersons(c.Request.Context(), collectionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	resp := make([]dto.PersonResponse, 0, len(persons))
+	for _, p := range persons {
+		faceCount, _ := h.db.CountFaces(c.Request.Context(), p.ID)
+		resp = append(resp, dto.PersonResponse{
+			ID:           p.ID,
+			CollectionID: p.CollectionID,
+			Name:         p.Name,
+			Metadata:     p.Metadata,
+			FaceCount:    faceCount,
+			CreatedAt:    p.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"persons": resp, "total": len(resp)})
+}
+
 func (h *PersonHandler) Get(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {

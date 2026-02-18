@@ -58,6 +58,7 @@ type VisionConfig struct {
 	MaxFPS               int     `yaml:"max_fps"`
 	WorkerCount          int     `yaml:"worker_count"`
 	FrameWidth           int     `yaml:"frame_width"`
+	MinFaceSize          int     `yaml:"min_face_size"`
 }
 
 type TrackingConfig struct {
@@ -116,6 +117,9 @@ func setDefaults(cfg *Config) {
 	}
 	if cfg.Vision.RecognitionThreshold == 0 {
 		cfg.Vision.RecognitionThreshold = 0.4
+	}
+	if cfg.Vision.MinFaceSize == 0 {
+		cfg.Vision.MinFaceSize = 40
 	}
 	if cfg.Tracking.MaxAge == 0 {
 		cfg.Tracking.MaxAge = 30

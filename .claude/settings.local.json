@@ -37,7 +37,12 @@
       "Bash(cmd /c \"dir /s /b C:\\\\Windows\\\\System32\\\\onnxruntime*.dll C:\\\\Windows\\\\SysWOW64\\\\onnxruntime*.dll D:\\\\Projects\\\\FD\\\\onnxruntime*.dll 2>nul\")",
       "Bash(cmd /c \"if not exist D:\\\\Projects\\\\FD\\\\bin mkdir D:\\\\Projects\\\\FD\\\\bin\")",
       "Bash(powershell.exe -NoProfile -File - <<'PS1'\n$tmp = [System.IO.Path]::GetTempPath\\(\\)\n$zip = Join-Path $tmp \"ort123.zip\"\n$dir = Join-Path $tmp \"ort123\"\nWrite-Host \"Downloading ORT 1.23.1...\"\nInvoke-WebRequest -Uri \"https://github.com/microsoft/onnxruntime/releases/download/v1.23.1/onnxruntime-win-x64-1.23.1.zip\" -OutFile $zip\nWrite-Host \"Extracting...\"\nExpand-Archive -Path $zip -DestinationPath $dir -Force\nWrite-Host \"Copying DLL...\"\nCopy-Item \\(Join-Path $dir \"onnxruntime-win-x64-1.23.1\\\\lib\\\\onnxruntime.dll\"\\) \"D:\\\\Projects\\\\FD\\\\bin\\\\onnxruntime.dll\" -Force\nWrite-Host \"DONE\"\nPS1)",
-      "Bash(cmd /c \"del /Q D:\\\\Projects\\\\FD\\\\api.exe D:\\\\Projects\\\\FD\\\\ingestor.exe D:\\\\Projects\\\\FD\\\\worker.exe 2>nul && echo DELETED || echo NOTHING TO DELETE\")"
+      "Bash(cmd /c \"del /Q D:\\\\Projects\\\\FD\\\\api.exe D:\\\\Projects\\\\FD\\\\ingestor.exe D:\\\\Projects\\\\FD\\\\worker.exe 2>nul && echo DELETED || echo NOTHING TO DELETE\")",
+      "Bash(ffmpeg:*)",
+      "Bash(ls:*)",
+      "Bash(docker volume ls:*)",
+      "Bash(docker volume inspect:*)",
+      "Bash(./bin/worker.exe:*)"
     ]
   }
 }

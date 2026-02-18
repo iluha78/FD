@@ -207,7 +207,56 @@ curl -X POST http://localhost:8080/v1/persons \
 # Upload face photo
 curl -X POST http://localhost:8080/v1/persons/<person-id>/faces \
   -H "X-API-Key: changeme" \
-  -F "file=@photo.jpg"
+  -F "image=@photo.jpg"
+```
+
+### List persons
+
+```bash
+# All persons
+curl http://localhost:8080/v1/persons \
+  -H "X-API-Key: changeme"
+
+# Filter by collection
+curl "http://localhost:8080/v1/persons?collection_id=<collection-uuid>" \
+  -H "X-API-Key: changeme"
+```
+
+Response:
+```json
+{
+  "persons": [
+    {
+      "id": "...",
+      "name": "John Doe",
+      "collection_id": "...",
+      "face_count": 2,
+      "created_at": "2026-02-18T12:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+### Get a person
+
+```bash
+curl http://localhost:8080/v1/persons/<person-id> \
+  -H "X-API-Key: changeme"
+```
+
+### List faces of a person
+
+```bash
+curl http://localhost:8080/v1/persons/<person-id>/faces \
+  -H "X-API-Key: changeme"
+```
+
+### Delete a face
+
+```bash
+curl -X DELETE http://localhost:8080/v1/persons/<person-id>/faces/<face-id> \
+  -H "X-API-Key: changeme"
 ```
 
 ### Search by face
@@ -271,11 +320,12 @@ minio:
 
 vision:
   models_dir: ./models
-  detection_threshold: 0.5    # min face confidence (0.0-1.0)
+  detection_threshold: 0.3    # min face confidence (0.0-1.0)
   recognition_threshold: 0.4  # min cosine similarity for match
   default_fps: 5              # frames per second from streams
   worker_count: 6             # parallel inference workers
-  frame_width: 1280           # frame width for processing
+  frame_width: 1920           # frame width for processing
+  min_face_size: 20           # min face size in pixels (filters out tiny detections)
 
 tracking:
   max_age: 30                 # frames before losing a track
@@ -321,7 +371,7 @@ make lint             # Run linter
 Services started before NATS was ready. Built-in retry handles this (up to 30s). Just wait.
 
 **"read frames: EOF"**
-FFmpeg couldn't connect to stream. Check URL, ffmpeg availability, network. Ingestor retries up to 3 times.
+FFmpeg couldn't connect to stream. Check URL, ffmpeg availability, network. Ingestor retries up to 5 times.
 
 **"vision pipeline not initialized"**
 ONNX Runtime not found or models missing. Check `models/` directory and library path.

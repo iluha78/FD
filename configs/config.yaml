@@ -22,12 +22,13 @@ minio:
 
 vision:
   models_dir: ./models
-  detection_threshold: 0.5
+  detection_threshold: 0.3
   recognition_threshold: 0.4
   default_fps: 5
   max_fps: 10
   worker_count: 6
-  frame_width: 1280
+  frame_width: 1920
+  min_face_size: 20
 
 tracking:
   max_age: 30

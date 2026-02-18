@@ -118,7 +118,7 @@ func (m *Manager) startStream(ctx context.Context, cmd StreamCommand) error {
 			slog.Info("stream ingestion stopped", "stream_id", cmd.StreamID)
 		}()
 
-		const maxRetries = 3
+		const maxRetries = 5
 		currentURL := streamURL
 
 		for attempt := 0; attempt <= maxRetries; attempt++ {

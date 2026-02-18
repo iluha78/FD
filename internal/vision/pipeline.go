@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"image/color"
 	"image/jpeg"
 	"log/slog"
 	"path/filepath"
@@ -117,6 +118,23 @@ func (p *Pipeline) ProcessFrame(ctx context.Context, task models.FrameTask) erro
 		return nil // No faces
 	}
 
+	// Filter out faces smaller than min_face_size
+	minSize := float32(p.cfg.MinFaceSize)
+	if minSize > 0 {
+		filtered := detections[:0]
+		for _, d := range detections {
+			w := d.BBox[2] - d.BBox[0]
+			h := d.BBox[3] - d.BBox[1]
+			if w >= minSize && h >= minSize {
+				filtered = append(filtered, d)
+			}
+		}
+		detections = filtered
+		if len(detections) == 0 {
+			return nil
+		}
+	}
+
 	observability.FacesDetected.WithLabelValues(task.StreamID.String()).Add(float64(len(detections)))
 
 	// 4. Update tracker
@@ -183,13 +201,17 @@ func (p *Pipeline) ProcessFrame(ctx context.Context, task models.FrameTask) erro
 		}
 		observability.InferenceDuration.WithLabelValues("match").Observe(time.Since(start).Seconds())
 
-		// 9. Save face snapshot to MinIO
-		snapshotKey := fmt.Sprintf("snapshots/%s/%s_%s.jpg",
-			task.StreamID.String(), track.ID, time.Now().Format("20060102_150405"))
-		snapshotData := encodeJPEG(faceCrop, 85)
-		if err := p.minio.PutObject(ctx, snapshotKey, snapshotData, "image/jpeg"); err != nil {
-			slog.Warn("save snapshot", "error", err)
-			snapshotKey = ""
+		// 9. Save face snapshot to MinIO only on first sighting (avoid redundant writes)
+		var snapshotKey string
+		if upd.IsNew {
+			snapshotKey = fmt.Sprintf("snapshots/%s/%s_%s.jpg",
+				task.StreamID.String(), track.ID, time.Now().Format("20060102_150405"))
+			snapshotImg := upscaleFace(faceCrop, 100)
+			snapshotData := encodeJPEG(snapshotImg, 100)
+			if err := p.minio.PutObject(ctx, snapshotKey, snapshotData, "image/jpeg"); err != nil {
+				slog.Warn("save snapshot", "error", err)
+				snapshotKey = ""
+			}
 		}
 
 		// 10. Publish detection event
@@ -300,38 +322,68 @@ func preprocessForAttributes(img image.Image, targetW, targetH int) []float32 {
 	return imageToFloat32CHW(img, targetW, targetH, [3]float32{0, 0, 0}, [3]float32{1, 1, 1})
 }
 
-// imageToFloat32CHW converts an image to CHW float32 format with normalization:
-//
-//	pixel = (pixel - mean) / std
+// imageToFloat32CHW resizes img to targetW×targetH and converts to CHW float32
+// in a single pass, normalising as: pixel = (pixel - mean) / std.
+// Direct pixel access avoids the image.Image interface overhead.
 func imageToFloat32CHW(img image.Image, targetW, targetH int, mean, std [3]float32) []float32 {
-	resized := resizeImage(img, targetW, targetH)
-	bounds := resized.Bounds()
-	w := bounds.Dx()
-	h := bounds.Dy()
+	data := make([]float32, 3*targetH*targetW)
+	planeSize := targetH * targetW
 
-	data := make([]float32, 3*h*w)
+	bounds := img.Bounds()
+	srcW := bounds.Dx()
+	srcH := bounds.Dy()
+	minX := bounds.Min.X
+	minY := bounds.Min.Y
 
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			r, g, b, _ := resized.At(x+bounds.Min.X, y+bounds.Min.Y).RGBA()
-
-			// Convert from 16-bit to 8-bit
-			rf := float32(r >> 8)
-			gf := float32(g >> 8)
-			bf := float32(b >> 8)
-
-			// CHW layout: [C][H][W]
-			idx := y*w + x
-			data[0*h*w+idx] = (rf - mean[0]) / std[0] // R
-			data[1*h*w+idx] = (gf - mean[1]) / std[1] // G
-			data[2*h*w+idx] = (bf - mean[2]) / std[2] // B
+	// Fast path: source is already *image.RGBA (most common after cropFace / SubImage)
+	switch src := img.(type) {
+	case *image.RGBA:
+		for y := 0; y < targetH; y++ {
+			srcY := minY + y*srcH/targetH
+			for x := 0; x < targetW; x++ {
+				srcX := minX + x*srcW/targetW
+				off := src.PixOffset(srcX, srcY)
+				pix := src.Pix[off : off+3 : off+3]
+				idx := y*targetW + x
+				data[idx] = (float32(pix[0]) - mean[0]) / std[0]           // R
+				data[planeSize+idx] = (float32(pix[1]) - mean[1]) / std[1] // G
+				data[2*planeSize+idx] = (float32(pix[2]) - mean[2]) / std[2] // B
+			}
+		}
+	case *image.YCbCr:
+		for y := 0; y < targetH; y++ {
+			srcY := minY + y*srcH/targetH
+			for x := 0; x < targetW; x++ {
+				srcX := minX + x*srcW/targetW
+				yi := src.YOffset(srcX, srcY)
+				ci := src.COffset(srcX, srcY)
+				r8, g8, b8 := color.YCbCrToRGB(src.Y[yi], src.Cb[ci], src.Cr[ci])
+				idx := y*targetW + x
+				data[idx] = (float32(r8) - mean[0]) / std[0]
+				data[planeSize+idx] = (float32(g8) - mean[1]) / std[1]
+				data[2*planeSize+idx] = (float32(b8) - mean[2]) / std[2]
+			}
+		}
+	default:
+		// Slow path: generic interface (handles NRGBA, Gray, etc.)
+		for y := 0; y < targetH; y++ {
+			srcY := minY + y*srcH/targetH
+			for x := 0; x < targetW; x++ {
+				srcX := minX + x*srcW/targetW
+				r, g, b, _ := img.At(srcX, srcY).RGBA()
+				idx := y*targetW + x
+				data[idx] = (float32(r>>8) - mean[0]) / std[0]
+				data[planeSize+idx] = (float32(g>>8) - mean[1]) / std[1]
+				data[2*planeSize+idx] = (float32(b>>8) - mean[2]) / std[2]
+			}
 		}
 	}
 
 	return data
 }
 
-// resizeImage performs nearest-neighbour resize (fast, good enough for ML input).
+// resizeImage performs nearest-neighbour resize. Returns *image.RGBA.
+// Kept for callers that need an image.Image result.
 func resizeImage(img image.Image, targetW, targetH int) image.Image {
 	bounds := img.Bounds()
 	srcW := bounds.Dx()
@@ -339,10 +391,26 @@ func resizeImage(img image.Image, targetW, targetH int) image.Image {
 
 	dst := image.NewRGBA(image.Rect(0, 0, targetW, targetH))
 
+	// Fast path for *image.RGBA source
+	if src, ok := img.(*image.RGBA); ok {
+		minX := bounds.Min.X
+		minY := bounds.Min.Y
+		for y := 0; y < targetH; y++ {
+			srcY := minY + y*srcH/targetH
+			for x := 0; x < targetW; x++ {
+				srcX := minX + x*srcW/targetW
+				sOff := src.PixOffset(srcX, srcY)
+				dOff := dst.PixOffset(x, y)
+				copy(dst.Pix[dOff:dOff+4], src.Pix[sOff:sOff+4])
+			}
+		}
+		return dst
+	}
+
 	for y := 0; y < targetH; y++ {
+		srcY := bounds.Min.Y + y*srcH/targetH
 		for x := 0; x < targetW; x++ {
 			srcX := bounds.Min.X + x*srcW/targetW
-			srcY := bounds.Min.Y + y*srcH/targetH
 			dst.Set(x, y, img.At(srcX, srcY))
 		}
 	}
@@ -400,14 +468,54 @@ func cropFace(img image.Image, bbox [4]float32) image.Image {
 		y2 = bounds.Max.Y
 	}
 
+	rect := image.Rect(x1, y1, x2, y2)
+
+	// Zero-copy path: SubImage shares the underlying pixel buffer.
+	type subImager interface {
+		SubImage(r image.Rectangle) image.Image
+	}
+	if si, ok := img.(subImager); ok {
+		return si.SubImage(rect)
+	}
+
+	// Fallback: generic pixel copy for types that don't support SubImage.
 	crop := image.NewRGBA(image.Rect(0, 0, x2-x1, y2-y1))
 	for cy := y1; cy < y2; cy++ {
 		for cx := x1; cx < x2; cx++ {
 			crop.Set(cx-x1, cy-y1, img.At(cx, cy))
 		}
 	}
-
 	return crop
+}
+
+// upscaleFace scales up a face crop so its shortest side is at least minSize pixels.
+// If the crop is already large enough, it is returned as-is.
+func upscaleFace(img image.Image, minSize int) image.Image {
+	bounds := img.Bounds()
+	w := bounds.Dx()
+	h := bounds.Dy()
+
+	shortest := w
+	if h < shortest {
+		shortest = h
+	}
+	if shortest >= minSize {
+		return img
+	}
+
+	scale := float64(minSize) / float64(shortest)
+	newW := int(float64(w) * scale)
+	newH := int(float64(h) * scale)
+
+	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
+	for y := 0; y < newH; y++ {
+		for x := 0; x < newW; x++ {
+			srcX := bounds.Min.X + x*w/newW
+			srcY := bounds.Min.Y + y*h/newH
+			dst.Set(x, y, img.At(srcX, srcY))
+		}
+	}
+	return dst
 }
 
 // encodeJPEG encodes an image as JPEG with the given quality.

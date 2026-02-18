@@ -133,6 +133,34 @@ func (s *PostgresStore) GetPerson(ctx context.Context, id uuid.UUID) (*models.Pe
 	return p, nil
 }
 
+func (s *PostgresStore) ListPersons(ctx context.Context, collectionID *uuid.UUID) ([]*models.Person, error) {
+	var rows pgx.Rows
+	var err error
+	if collectionID != nil {
+		rows, err = s.pool.Query(ctx,
+			`SELECT id, collection_id, name, metadata, created_at, updated_at
+			 FROM persons WHERE collection_id = $1 ORDER BY created_at DESC`, *collectionID)
+	} else {
+		rows, err = s.pool.Query(ctx,
+			`SELECT id, collection_id, name, metadata, created_at, updated_at
+			 FROM persons ORDER BY created_at DESC`)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list persons: %w", err)
+	}
+	defer rows.Close()
+
+	var persons []*models.Person
+	for rows.Next() {
+		p := &models.Person{}
+		if err := rows.Scan(&p.ID, &p.CollectionID, &p.Name, &p.Metadata, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan person: %w", err)
+		}
+		persons = append(persons, p)
+	}
+	return persons, rows.Err()
+}
+
 func (s *PostgresStore) CountFaces(ctx context.Context, personID uuid.UUID) (int, error) {
 	var count int
 	err := s.pool.QueryRow(ctx,

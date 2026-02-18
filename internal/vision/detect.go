@@ -155,11 +155,12 @@ func (d *Detector) parseDetections(origW, origH int) []Detection {
 						anchorY := float32(cy) * float32(stride)
 
 						// Decode bbox: distance from anchor to edges
-						// Model output already includes stride scaling (stride_reg layer in ONNX)
-						x1 := (anchorX - bboxes[idx*4+0]) * scaleW
-						y1 := (anchorY - bboxes[idx*4+1]) * scaleH
-						x2 := (anchorX + bboxes[idx*4+2]) * scaleW
-						y2 := (anchorY + bboxes[idx*4+3]) * scaleH
+						// Model outputs normalized distances – multiply by stride for pixel scale
+						st := float32(stride)
+						x1 := (anchorX - bboxes[idx*4+0]*st) * scaleW
+						y1 := (anchorY - bboxes[idx*4+1]*st) * scaleH
+						x2 := (anchorX + bboxes[idx*4+2]*st) * scaleW
+						y2 := (anchorY + bboxes[idx*4+3]*st) * scaleH
 
 						// Clamp to image bounds
 						x1 = clampF(x1, 0, float32(origW))
@@ -170,8 +171,8 @@ func (d *Detector) parseDetections(origW, origH int) []Detection {
 						// Decode landmarks
 						var lm [5][2]float32
 						for li := 0; li < 5; li++ {
-							lm[li][0] = (anchorX + landmarks[idx*10+li*2]) * scaleW
-							lm[li][1] = (anchorY + landmarks[idx*10+li*2+1]) * scaleH
+							lm[li][0] = (anchorX + landmarks[idx*10+li*2]*st) * scaleW
+							lm[li][1] = (anchorY + landmarks[idx*10+li*2+1]*st) * scaleH
 						}
 
 						detections = append(detections, Detection{
