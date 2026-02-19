@@ -59,6 +59,8 @@ type VisionConfig struct {
 	WorkerCount          int     `yaml:"worker_count"`
 	FrameWidth           int     `yaml:"frame_width"`
 	MinFaceSize          int     `yaml:"min_face_size"`
+	IntraOpThreads       int     `yaml:"intra_op_threads"`  // ORT threads per op (0 = auto)
+	InterOpThreads       int     `yaml:"inter_op_threads"`  // ORT threads between ops (0 = auto)
 }
 
 type TrackingConfig struct {
@@ -120,6 +122,14 @@ func setDefaults(cfg *Config) {
 	}
 	if cfg.Vision.MinFaceSize == 0 {
 		cfg.Vision.MinFaceSize = 40
+	}
+	if cfg.Vision.IntraOpThreads == 0 {
+		// Default: 2 threads per session. With 6 workers × 3 models = 18 sessions,
+		// this caps ORT at ~36 threads total instead of 18×all-cores.
+		cfg.Vision.IntraOpThreads = 2
+	}
+	if cfg.Vision.InterOpThreads == 0 {
+		cfg.Vision.InterOpThreads = 1
 	}
 	if cfg.Tracking.MaxAge == 0 {
 		cfg.Tracking.MaxAge = 30

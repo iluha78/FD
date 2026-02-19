@@ -5,12 +5,15 @@ build: build-api build-ingestor build-worker
 
 build-api:
 	go build -o bin/api.exe ./cmd/api
+	powershell -Command "Unblock-File bin/api.exe"
 
 build-ingestor:
 	go build -o bin/ingestor.exe ./cmd/ingestor
+	powershell -Command "Unblock-File bin/ingestor.exe"
 
 build-worker:
 	go build -o bin/worker.exe ./cmd/worker
+	powershell -Command "Unblock-File bin/worker.exe"
 
 # Run services locally
 run-api:

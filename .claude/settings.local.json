@@ -42,7 +42,12 @@
       "Bash(ls:*)",
       "Bash(docker volume ls:*)",
       "Bash(docker volume inspect:*)",
-      "Bash(./bin/worker.exe:*)"
+      "Bash(./bin/worker.exe:*)",
+      "Bash(powershell.exe -Command \"Unblock-File -Path ''D:\\\\Projects\\\\FD\\\\bin\\\\worker.exe''; Write-Host ''Done''\")",
+      "Bash(powershell.exe -Command \"Unblock-File ''D:\\\\Projects\\\\FD\\\\bin\\\\api.exe''; Unblock-File ''D:\\\\Projects\\\\FD\\\\bin\\\\worker.exe''; Unblock-File ''D:\\\\Projects\\\\FD\\\\bin\\\\ingestor.exe''; Write-Host ''All unblocked''\")",
+      "Bash(powershell.exe -Command \"\nUnblock-File ''D:\\\\Projects\\\\FD\\\\bin\\\\worker.exe''\nCopy-Item ''D:\\\\Projects\\\\FD\\\\bin\\\\worker.exe'' ''D:\\\\Projects\\\\FD\\\\worker.exe'' -Force\nUnblock-File ''D:\\\\Projects\\\\FD\\\\worker.exe''\nWrite-Host ''Done''\n\")",
+      "Bash(powershell.exe -Command \"Get-Item ''D:\\\\Projects\\\\FD\\\\bin\\\\worker.exe'' -Stream ''*'' | Select-Object Stream\")",
+      "Bash(powershell.exe -Command \"Add-MpPreference -ExclusionPath ''D:\\\\Projects\\\\FD\\\\bin''; Write-Host ''Exclusion added''\")"
     ]
   }
 }

@@ -32,7 +32,8 @@ var strides = []int{8, 16, 32}
 const anchorsPerStride = 2
 
 // NewDetector loads the RetinaFace ONNX model.
-func NewDetector(modelPath string, threshold float32) (*Detector, error) {
+// opts may be nil (ORT defaults) or a pre-configured *ort.SessionOptions.
+func NewDetector(modelPath string, threshold float32, opts *ort.SessionOptions) (*Detector, error) {
 	inputW, inputH := 640, 640
 
 	inputShape := ort.NewShape(1, 3, int64(inputH), int64(inputW))
@@ -91,7 +92,7 @@ func NewDetector(modelPath string, threshold float32) (*Detector, error) {
 		outputNames,
 		[]ort.Value{inputTensor},
 		outputValues,
-		nil,
+		opts,
 	)
 	if err != nil {
 		inputTensor.Destroy()

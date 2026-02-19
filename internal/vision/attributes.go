@@ -25,7 +25,8 @@ type AttributePredictor struct {
 }
 
 // NewAttributePredictor loads the gender/age ONNX model.
-func NewAttributePredictor(modelPath string) (*AttributePredictor, error) {
+// opts may be nil (ORT defaults) or a pre-configured *ort.SessionOptions.
+func NewAttributePredictor(modelPath string, opts *ort.SessionOptions) (*AttributePredictor, error) {
 	// InsightFace genderage model expects 96x96 input
 	inputW, inputH := 96, 96
 
@@ -47,7 +48,7 @@ func NewAttributePredictor(modelPath string) (*AttributePredictor, error) {
 		[]string{"fc1"},
 		[]ort.Value{inputTensor},
 		[]ort.Value{outputTensor},
-		nil,
+		opts,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create attribute session: %w", err)

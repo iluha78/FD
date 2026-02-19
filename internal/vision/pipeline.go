@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	ort "github.com/yalue/onnxruntime_go"
 
 	"github.com/your-org/fd/internal/config"
 	"github.com/your-org/fd/internal/models"
@@ -47,21 +48,63 @@ func NewPipeline(
 	embPath := filepath.Join(cfg.ModelsDir, "w600k_r50.onnx")
 	attrPath := filepath.Join(cfg.ModelsDir, "genderage.onnx")
 
-	slog.Info("loading detection model", "path", detPath)
-	det, err := NewDetector(detPath, float32(cfg.DetectionThreshold))
+	// Build session options to cap ORT thread usage per model session.
+	// Each call to newSessionOptions() returns a fresh *ort.SessionOptions
+	// that must be destroyed after the session is created.
+	newSessionOptions := func() (*ort.SessionOptions, error) {
+		opts, err := ort.NewSessionOptions()
+		if err != nil {
+			return nil, fmt.Errorf("create session options: %w", err)
+		}
+		if cfg.IntraOpThreads > 0 {
+			if err := opts.SetIntraOpNumThreads(cfg.IntraOpThreads); err != nil {
+				opts.Destroy()
+				return nil, fmt.Errorf("set intra_op_threads: %w", err)
+			}
+		}
+		if cfg.InterOpThreads > 0 {
+			if err := opts.SetInterOpNumThreads(cfg.InterOpThreads); err != nil {
+				opts.Destroy()
+				return nil, fmt.Errorf("set inter_op_threads: %w", err)
+			}
+		}
+		return opts, nil
+	}
+
+	slog.Info("loading detection model", "path", detPath,
+		"intra_op_threads", cfg.IntraOpThreads, "inter_op_threads", cfg.InterOpThreads)
+	detOpts, err := newSessionOptions()
+	if err != nil {
+		return nil, err
+	}
+	det, err := NewDetector(detPath, float32(cfg.DetectionThreshold), detOpts)
+	detOpts.Destroy()
 	if err != nil {
 		return nil, fmt.Errorf("load detector: %w", err)
 	}
 
 	slog.Info("loading embedding model", "path", embPath)
-	emb, err := NewEmbedder(embPath)
+	embOpts, err := newSessionOptions()
+	if err != nil {
+		det.Close()
+		return nil, err
+	}
+	emb, err := NewEmbedder(embPath, embOpts)
+	embOpts.Destroy()
 	if err != nil {
 		det.Close()
 		return nil, fmt.Errorf("load embedder: %w", err)
 	}
 
 	slog.Info("loading attribute model", "path", attrPath)
-	attr, err := NewAttributePredictor(attrPath)
+	attrOpts, err := newSessionOptions()
+	if err != nil {
+		det.Close()
+		emb.Close()
+		return nil, err
+	}
+	attr, err := NewAttributePredictor(attrPath, attrOpts)
+	attrOpts.Destroy()
 	if err != nil {
 		det.Close()
 		emb.Close()

@@ -18,7 +18,8 @@ type Embedder struct {
 }
 
 // NewEmbedder loads the ArcFace ONNX model for face embedding extraction.
-func NewEmbedder(modelPath string) (*Embedder, error) {
+// opts may be nil (ORT defaults) or a pre-configured *ort.SessionOptions.
+func NewEmbedder(modelPath string, opts *ort.SessionOptions) (*Embedder, error) {
 	// ArcFace w600k_r50 expects 112x112 input
 	inputW, inputH := 112, 112
 	embDim := 512
@@ -40,7 +41,7 @@ func NewEmbedder(modelPath string) (*Embedder, error) {
 		[]string{"683"},
 		[]ort.Value{inputTensor},
 		[]ort.Value{outputTensor},
-		nil,
+		opts,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create embedder session: %w", err)
