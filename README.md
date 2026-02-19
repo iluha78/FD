@@ -185,7 +185,9 @@ Response includes for each detection:
 - `confidence` — face detection confidence
 - `matched_person_id` — UUID if face matched a known person
 - `match_score` — cosine similarity score
-- `snapshot_url` — URL to face crop image
+- `snapshot_url` — URL to face crop image (`GET /v1/events/:id/snapshot`)
+- `frame_url` — URL to full camera frame (`GET /v1/events/:id/frame`)
+- `track_id` — track identifier, use for `/v1/events/similar`
 
 ### Get face snapshot
 
@@ -194,6 +196,66 @@ curl http://localhost:8080/v1/events/<event-id>/snapshot \
   -H "X-API-Key: changeme" \
   --output face.jpg
 ```
+
+### Get full frame
+
+Returns the full camera frame in which the face was detected.
+
+```bash
+curl http://localhost:8080/v1/events/<event-id>/frame \
+  -H "X-API-Key: changeme" \
+  --output frame.jpg
+```
+
+### Search events by face photo
+
+Upload a face photo — returns all past detection events where this face appeared.
+
+```bash
+# Across all streams
+curl -X POST http://localhost:8080/v1/search/events \
+  -H "X-API-Key: changeme" \
+  -F "image=@photo.jpg"
+
+# Filter by stream, custom threshold and limit
+curl -X POST "http://localhost:8080/v1/search/events?stream_id=<uuid>&threshold=0.5&limit=20" \
+  -H "X-API-Key: changeme" \
+  -F "image=@photo.jpg"
+```
+
+Response:
+```json
+{
+  "results": [
+    {
+      "event_id": "...",
+      "stream_id": "...",
+      "timestamp": "2026-02-19T10:00:00Z",
+      "score": 0.82,
+      "gender": "female",
+      "age": 28,
+      "age_range": "25-30",
+      "snapshot_url": "/v1/events/.../snapshot"
+    }
+  ],
+  "total": 3
+}
+```
+
+### Find similar faces by track_id
+
+Find all events across all streams where the same face appeared, identified by a `track_id` from a known event.
+
+```bash
+curl "http://localhost:8080/v1/events/similar?stream_id=<uuid>&track_id=<track_id>" \
+  -H "X-API-Key: changeme"
+
+# With custom threshold and limit
+curl "http://localhost:8080/v1/events/similar?stream_id=<uuid>&track_id=<track_id>&threshold=0.5&limit=20" \
+  -H "X-API-Key: changeme"
+```
+
+`track_id` is available in the events list response (`GET /v1/streams/:id/events`).
 
 ### Add a known person with face
 
@@ -259,12 +321,31 @@ curl -X DELETE http://localhost:8080/v1/persons/<person-id>/faces/<face-id> \
   -H "X-API-Key: changeme"
 ```
 
-### Search by face
+### Search persons by face photo
+
+Upload a face photo — returns matching persons from the library.
 
 ```bash
+# Across all collections
 curl -X POST http://localhost:8080/v1/search \
   -H "X-API-Key: changeme" \
-  -F "file=@unknown.jpg"
+  -F "image=@unknown.jpg"
+
+# Filter by collection
+curl -X POST http://localhost:8080/v1/search \
+  -H "X-API-Key: changeme" \
+  -F "image=@unknown.jpg" \
+  -F "collection_id=<uuid>"
+```
+
+Response:
+```json
+{
+  "results": [
+    { "person_id": "...", "name": "John Doe", "score": 0.91 }
+  ],
+  "total": 1
+}
 ```
 
 ### WebSocket (real-time events)

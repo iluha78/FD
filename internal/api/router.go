@@ -70,8 +70,12 @@ func NewRouter(cfg RouterConfig) *gin.Engine {
 
 	// Events
 	eventH := handlers.NewEventHandler(cfg.DB, cfg.MinIO)
+	eventH.EmbedFn = cfg.EmbedFn
 	v1.GET("/streams/:id/events", eventH.List)
 	v1.GET("/events/:id/snapshot", eventH.Snapshot)
+	v1.GET("/events/:id/frame", eventH.Frame)
+	v1.GET("/events/similar", eventH.SimilarByTrack)
+	v1.POST("/search/events", eventH.SearchEvents)
 
 	return r
 }

@@ -107,6 +107,7 @@ func main() {
 			MatchedPersonID:  result.MatchedPersonID,
 			MatchScore:       result.MatchScore,
 			SnapshotKey:      result.SnapshotKey,
+			FrameKey:         result.FrameKey,
 		}
 		if err := db.CreateEvent(ctx, event); err != nil {
 			slog.Error("store event", "error", err)

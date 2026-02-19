@@ -276,6 +276,71 @@ type SearchMatch struct {
 	Score    float32   `json:"score"`
 }
 
+// EventMatch is one result from SearchEvents.
+type EventMatch struct {
+	EventID         uuid.UUID  `json:"event_id"`
+	StreamID        uuid.UUID  `json:"stream_id"`
+	Timestamp       time.Time  `json:"timestamp"`
+	Score           float32    `json:"score"`
+	Gender          string     `json:"gender"`
+	Age             int        `json:"age"`
+	AgeRange        string     `json:"age_range"`
+	MatchedPersonID *uuid.UUID `json:"matched_person_id,omitempty"`
+	SnapshotKey     string     `json:"snapshot_key"`
+}
+
+// SearchEvents finds detection events whose stored embedding is similar to the query embedding.
+// Optionally filtered by stream_id. Returns up to limit results above threshold.
+func (s *PostgresStore) SearchEvents(ctx context.Context, embedding []float32, streamID *uuid.UUID, threshold float64, limit int) ([]EventMatch, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	vec := pgvector.NewVector(embedding)
+
+	var query string
+	var args []interface{}
+
+	if streamID != nil {
+		query = `
+			SELECT id, stream_id, timestamp, 1 - (embedding <=> $1) AS score,
+			       gender, age, age_range, matched_person_id, snapshot_key
+			FROM events
+			WHERE embedding IS NOT NULL
+			  AND stream_id = $2
+			  AND 1 - (embedding <=> $1) >= $3
+			ORDER BY embedding <=> $1
+			LIMIT $4`
+		args = []interface{}{vec, *streamID, threshold, limit}
+	} else {
+		query = `
+			SELECT id, stream_id, timestamp, 1 - (embedding <=> $1) AS score,
+			       gender, age, age_range, matched_person_id, snapshot_key
+			FROM events
+			WHERE embedding IS NOT NULL
+			  AND 1 - (embedding <=> $1) >= $2
+			ORDER BY embedding <=> $1
+			LIMIT $3`
+		args = []interface{}{vec, threshold, limit}
+	}
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("search events: %w", err)
+	}
+	defer rows.Close()
+
+	var matches []EventMatch
+	for rows.Next() {
+		var m EventMatch
+		if err := rows.Scan(&m.EventID, &m.StreamID, &m.Timestamp, &m.Score,
+			&m.Gender, &m.Age, &m.AgeRange, &m.MatchedPersonID, &m.SnapshotKey); err != nil {
+			return nil, fmt.Errorf("scan event match: %w", err)
+		}
+		matches = append(matches, m)
+	}
+	return matches, rows.Err()
+}
+
 // --- Streams ---
 
 func (s *PostgresStore) CreateStream(ctx context.Context, st *models.Stream) error {
@@ -357,11 +422,11 @@ func (s *PostgresStore) CreateEvent(ctx context.Context, ev *models.Event) error
 		vec = &v
 	}
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO events (id, stream_id, track_id, timestamp, gender, gender_confidence, age, age_range, confidence, embedding, matched_person_id, match_score, snapshot_key, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+		`INSERT INTO events (id, stream_id, track_id, timestamp, gender, gender_confidence, age, age_range, confidence, embedding, matched_person_id, match_score, snapshot_key, frame_key, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 		ev.ID, ev.StreamID, ev.TrackID, ev.Timestamp,
 		ev.Gender, ev.GenderConfidence, ev.Age, ev.AgeRange, ev.Confidence,
-		vec, ev.MatchedPersonID, ev.MatchScore, ev.SnapshotKey, ev.CreatedAt)
+		vec, ev.MatchedPersonID, ev.MatchScore, ev.SnapshotKey, ev.FrameKey, ev.CreatedAt)
 	return err
 }
 
@@ -405,7 +470,7 @@ func (s *PostgresStore) QueryEvents(ctx context.Context, streamID uuid.UUID, fro
 
 	// Fetch page
 	query := fmt.Sprintf(
-		`SELECT id, stream_id, track_id, timestamp, gender, gender_confidence, age, age_range, confidence, matched_person_id, match_score, snapshot_key, created_at
+		`SELECT id, stream_id, track_id, timestamp, gender, gender_confidence, age, age_range, confidence, matched_person_id, match_score, snapshot_key, frame_key, created_at
 		 FROM events %s ORDER BY timestamp DESC LIMIT $%d OFFSET $%d`,
 		baseWhere, argIdx, argIdx+1)
 	args = append(args, limit, offset)
@@ -421,7 +486,7 @@ func (s *PostgresStore) QueryEvents(ctx context.Context, streamID uuid.UUID, fro
 		var ev models.Event
 		if err := rows.Scan(&ev.ID, &ev.StreamID, &ev.TrackID, &ev.Timestamp,
 			&ev.Gender, &ev.GenderConfidence, &ev.Age, &ev.AgeRange, &ev.Confidence,
-			&ev.MatchedPersonID, &ev.MatchScore, &ev.SnapshotKey, &ev.CreatedAt); err != nil {
+			&ev.MatchedPersonID, &ev.MatchScore, &ev.SnapshotKey, &ev.FrameKey, &ev.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan event: %w", err)
 		}
 		events = append(events, ev)
@@ -429,15 +494,33 @@ func (s *PostgresStore) QueryEvents(ctx context.Context, streamID uuid.UUID, fro
 	return events, total, nil
 }
 
+// GetEmbeddingByTrackID returns the embedding of the highest-confidence event for a given track_id.
+func (s *PostgresStore) GetEmbeddingByTrackID(ctx context.Context, streamID uuid.UUID, trackID string) ([]float32, error) {
+	var vec pgvector.Vector
+	err := s.pool.QueryRow(ctx,
+		`SELECT embedding FROM events
+		 WHERE stream_id = $1 AND track_id = $2 AND embedding IS NOT NULL
+		 ORDER BY confidence DESC LIMIT 1`,
+		streamID, trackID,
+	).Scan(&vec)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get embedding by track: %w", err)
+	}
+	return vec.Slice(), nil
+}
+
 // GetEvent returns a single event by ID.
 func (s *PostgresStore) GetEvent(ctx context.Context, id uuid.UUID) (*models.Event, error) {
 	var ev models.Event
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, stream_id, track_id, timestamp, gender, gender_confidence, age, age_range, confidence, matched_person_id, match_score, snapshot_key, created_at
+		`SELECT id, stream_id, track_id, timestamp, gender, gender_confidence, age, age_range, confidence, matched_person_id, match_score, snapshot_key, frame_key, created_at
 		 FROM events WHERE id = $1`, id).
 		Scan(&ev.ID, &ev.StreamID, &ev.TrackID, &ev.Timestamp,
 			&ev.Gender, &ev.GenderConfidence, &ev.Age, &ev.AgeRange, &ev.Confidence,
-			&ev.MatchedPersonID, &ev.MatchScore, &ev.SnapshotKey, &ev.CreatedAt)
+			&ev.MatchedPersonID, &ev.MatchScore, &ev.SnapshotKey, &ev.FrameKey, &ev.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get event: %w", err)
 	}

@@ -107,6 +107,94 @@ func (c *Consumer) ConsumeFrames(ctx context.Context, consumerName string, handl
 	return nil
 }
 
+// WorkerHandler is a handler that receives a message and a worker index.
+// The caller uses the index to select a dedicated (non-shared) resource for that worker.
+type WorkerHandler func(ctx context.Context, msg jetstream.Msg, workerID int) error
+
+// ConsumeFramesWithIndex is like ConsumeFrames but passes the worker index to the handler,
+// so each goroutine can use its own dedicated pipeline instance.
+func (c *Consumer) ConsumeFramesWithIndex(ctx context.Context, consumerName string, handler WorkerHandler, workerCount int) error {
+	stream, err := c.js.Stream(ctx, FramesStreamName)
+	if err != nil {
+		return fmt.Errorf("get stream %s: %w", FramesStreamName, err)
+	}
+
+	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+		Name:          consumerName,
+		Durable:       consumerName,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		AckWait:       30 * time.Second,
+		MaxDeliver:    3,
+		FilterSubject: FramesSubjectBase + ".>",
+	})
+	if err != nil {
+		return fmt.Errorf("create consumer %s: %w", consumerName, err)
+	}
+
+	// One channel per worker — each goroutine owns its channel exclusively
+	channels := make([]chan jetstream.Msg, workerCount)
+	for i := range channels {
+		channels[i] = make(chan jetstream.Msg, 2)
+	}
+
+	// Fetch loop: round-robin dispatch to per-worker channels
+	go func() {
+		idx := 0
+		for {
+			select {
+			case <-ctx.Done():
+				for _, ch := range channels {
+					close(ch)
+				}
+				return
+			default:
+			}
+
+			batch, err := cons.Fetch(workerCount, jetstream.FetchMaxWait(5*time.Second))
+			if err != nil {
+				if ctx.Err() != nil {
+					for _, ch := range channels {
+						close(ch)
+					}
+					return
+				}
+				slog.Warn("fetch frames error", "error", err)
+				time.Sleep(time.Second)
+				continue
+			}
+
+			for msg := range batch.Messages() {
+				select {
+				case channels[idx%workerCount] <- msg:
+					idx++
+				case <-ctx.Done():
+					for _, ch := range channels {
+						close(ch)
+					}
+					return
+				}
+			}
+		}
+	}()
+
+	// One goroutine per worker — each reads only from its own channel
+	for i := 0; i < workerCount; i++ {
+		go func(workerID int, ch <-chan jetstream.Msg) {
+			for msg := range ch {
+				if err := handler(ctx, msg, workerID); err != nil {
+					slog.Error("process frame error", "worker", workerID, "error", err, "subject", msg.Subject())
+					_ = msg.Nak()
+				} else {
+					_ = msg.Ack()
+				}
+			}
+		}(i, channels[i])
+	}
+
+	slog.Info("frame consumer started (indexed)", "consumer", consumerName, "workers", workerCount)
+	return nil
+}
+
 // ConsumeEvents starts consuming detection events (for API to broadcast via WebSocket).
 func (c *Consumer) ConsumeEvents(ctx context.Context, consumerName string, handler MessageHandler) error {
 	stream, err := c.js.Stream(ctx, EventsStreamName)

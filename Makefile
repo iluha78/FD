@@ -33,6 +33,8 @@ infra-down:
 migrate:
 	@echo "Applying migrations..."
 	docker exec -i fd-postgres psql -U fd -d fd < internal/storage/migrations/001_init.sql
+	docker exec -i fd-postgres psql -U fd -d fd < internal/storage/migrations/002_events_embedding_index.sql
+	docker exec -i fd-postgres psql -U fd -d fd < internal/storage/migrations/003_events_frame_key.sql
 
 # Lint
 lint:

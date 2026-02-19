@@ -20,17 +20,19 @@ type Event struct {
 	MatchedPersonID  *uuid.UUID `json:"matched_person_id,omitempty" db:"matched_person_id"`
 	MatchScore       float32    `json:"match_score,omitempty" db:"match_score"`
 	SnapshotKey      string     `json:"snapshot_key" db:"snapshot_key"`
+	FrameKey         string     `json:"frame_key" db:"frame_key"` // MinIO key of the full frame
 	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
 }
 
 // FrameTask is the message published to NATS for worker processing.
 type FrameTask struct {
-	StreamID  uuid.UUID `json:"stream_id"`
-	FrameID   uuid.UUID `json:"frame_id"`
-	Timestamp time.Time `json:"timestamp"`
-	FrameRef  string    `json:"frame_ref"` // MinIO object key
-	Width     int       `json:"width"`
-	Height    int       `json:"height"`
+	StreamID     uuid.UUID  `json:"stream_id"`
+	FrameID      uuid.UUID  `json:"frame_id"`
+	Timestamp    time.Time  `json:"timestamp"`
+	FrameRef     string     `json:"frame_ref"` // MinIO object key
+	Width        int        `json:"width"`
+	Height       int        `json:"height"`
+	CollectionID *uuid.UUID `json:"collection_id,omitempty"` // stream's collection for scoped search
 }
 
 // DetectionResult is the output from a vision worker for one face.
@@ -48,4 +50,5 @@ type DetectionResult struct {
 	MatchedPersonID  *uuid.UUID `json:"matched_person_id,omitempty"`
 	MatchScore       float32    `json:"match_score,omitempty"`
 	SnapshotKey      string     `json:"snapshot_key"`
+	FrameKey         string     `json:"frame_key"` // MinIO key of the full frame
 }

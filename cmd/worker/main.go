@@ -78,15 +78,29 @@ func main() {
 		slog.Warn("ensure nats streams", "error", err)
 	}
 
-	// Initialize vision pipeline
-	pipeline, err := vision.NewPipeline(cfg.Vision, cfg.Tracking, db, minioStore, producer)
-	if err != nil {
-		slog.Error("init vision pipeline", "error", err)
-		os.Exit(1)
+	// Create one independent Pipeline per worker.
+	// ONNX sessions are NOT thread-safe — each worker must own its own instance.
+	workerCount := cfg.Vision.WorkerCount
+	if workerCount <= 0 {
+		workerCount = 1
 	}
-	defer pipeline.Close()
 
-	slog.Info("vision pipeline initialized")
+	pipelines := make([]*vision.Pipeline, workerCount)
+	for i := 0; i < workerCount; i++ {
+		p, err := vision.NewPipeline(cfg.Vision, cfg.Tracking, db, minioStore, producer)
+		if err != nil {
+			slog.Error("init vision pipeline", "worker", i, "error", err)
+			os.Exit(1)
+		}
+		pipelines[i] = p
+	}
+	defer func() {
+		for _, p := range pipelines {
+			p.Close()
+		}
+	}()
+
+	slog.Info("vision pipelines initialized", "count", workerCount)
 
 	// Create NATS consumer
 	consumer, err := queue.NewConsumer(cfg.NATS.URL)
@@ -99,20 +113,20 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start consuming frame tasks
-	err = consumer.ConsumeFrames(ctx, "vision-workers", func(ctx context.Context, msg jetstream.Msg) error {
+	// Each worker goroutine gets its own pipeline via workerID index — no sharing.
+	err = consumer.ConsumeFramesWithIndex(ctx, "vision-workers", func(ctx context.Context, msg jetstream.Msg, workerID int) error {
 		var task models.FrameTask
 		if err := json.Unmarshal(msg.Data(), &task); err != nil {
 			slog.Error("unmarshal frame task", "error", err)
 			return nil // Don't retry on unmarshal errors
 		}
 
-		if err := pipeline.ProcessFrame(ctx, task); err != nil {
+		if err := pipelines[workerID].ProcessFrame(ctx, task); err != nil {
 			return fmt.Errorf("process frame %s: %w", task.FrameID, err)
 		}
 
 		return nil
-	}, cfg.Vision.WorkerCount)
+	}, workerCount)
 	if err != nil {
 		slog.Error("start frame consumer", "error", err)
 		os.Exit(1)

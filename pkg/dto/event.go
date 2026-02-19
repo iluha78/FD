@@ -16,6 +16,7 @@ type EventResponse struct {
 	MatchedName      string     `json:"matched_name,omitempty"`
 	MatchScore       float32    `json:"match_score,omitempty"`
 	SnapshotURL      string     `json:"snapshot_url,omitempty"`
+	FrameURL         string     `json:"frame_url,omitempty"`
 	CreatedAt        string     `json:"created_at"`
 }
 
@@ -32,6 +33,19 @@ type EventQuery struct {
 	Unknown  *bool  `form:"unknown"`
 	Limit    int    `form:"limit"`
 	Offset   int    `form:"offset"`
+}
+
+// EventSearchResult is one result from POST /v1/search/events.
+type EventSearchResult struct {
+	EventID         uuid.UUID  `json:"event_id"`
+	StreamID        uuid.UUID  `json:"stream_id"`
+	Timestamp       string     `json:"timestamp"`
+	Score           float32    `json:"score"`
+	Gender          string     `json:"gender"`
+	Age             int        `json:"age"`
+	AgeRange        string     `json:"age_range"`
+	MatchedPersonID *uuid.UUID `json:"matched_person_id,omitempty"`
+	SnapshotURL     string     `json:"snapshot_url,omitempty"`
 }
 
 // WSEvent is a WebSocket message for real-time event delivery.

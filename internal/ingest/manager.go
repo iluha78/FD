@@ -91,6 +91,14 @@ func (m *Manager) startStream(ctx context.Context, cmd StreamCommand) error {
 		fps = 5
 	}
 
+	// Pre-parse collection ID once (avoids repeated parsing per frame)
+	var collectionID *uuid.UUID
+	if cmd.CollectionID != "" {
+		if id, err := uuid.Parse(cmd.CollectionID); err == nil {
+			collectionID = &id
+		}
+	}
+
 	streamCtx, cancel := context.WithCancel(ctx)
 	extractor := &FFmpegExtractor{}
 
@@ -150,9 +158,10 @@ func (m *Manager) startStream(ctx context.Context, cmd StreamCommand) error {
 				extractor = &FFmpegExtractor{}
 			}
 
+			streamUUID, _ := uuid.Parse(cmd.StreamID)
+
 			err := extractor.StartExtraction(streamCtx, currentURL, fps, m.width, func(frameData []byte) error {
 				frameID := uuid.New()
-				streamUUID, _ := uuid.Parse(cmd.StreamID)
 
 				// Upload frame to MinIO
 				key := fmt.Sprintf("frames/%s/%s.jpg", cmd.StreamID, frameID.String())
@@ -160,14 +169,15 @@ func (m *Manager) startStream(ctx context.Context, cmd StreamCommand) error {
 					return fmt.Errorf("upload frame: %w", err)
 				}
 
-				// Publish frame task to NATS
+				// Publish frame task to NATS (include collection for scoped recognition)
 				task := models.FrameTask{
-					StreamID:  streamUUID,
-					FrameID:   frameID,
-					Timestamp: time.Now(),
-					FrameRef:  key,
-					Width:     m.width,
-					Height:    0, // Will be determined by worker
+					StreamID:     streamUUID,
+					FrameID:      frameID,
+					Timestamp:    time.Now(),
+					FrameRef:     key,
+					Width:        m.width,
+					Height:       0, // Will be determined by worker
+					CollectionID: collectionID,
 				}
 
 				if err := m.producer.PublishFrame(streamCtx, cmd.StreamID, task); err != nil {

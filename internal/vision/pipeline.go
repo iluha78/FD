@@ -188,7 +188,7 @@ func (p *Pipeline) ProcessFrame(ctx context.Context, task models.FrameTask) erro
 		var matchScore float32
 
 		start = time.Now()
-		matches, err := p.db.SearchFaces(ctx, embedding, nil, p.cfg.RecognitionThreshold, 1)
+		matches, err := p.db.SearchFaces(ctx, embedding, task.CollectionID, p.cfg.RecognitionThreshold, 1)
 		if err != nil {
 			slog.Warn("search error", "error", err)
 		} else if len(matches) > 0 {
@@ -229,6 +229,7 @@ func (p *Pipeline) ProcessFrame(ctx context.Context, task models.FrameTask) erro
 			MatchedPersonID:  matchedPersonID,
 			MatchScore:       matchScore,
 			SnapshotKey:      snapshotKey,
+			FrameKey:         task.FrameRef,
 		}
 
 		if err := p.producer.PublishEvent(ctx, task.StreamID.String(), result); err != nil {
