@@ -21,6 +21,31 @@ import (
 	"github.com/your-org/fd/internal/storage"
 )
 
+func cleanupFrames(ctx context.Context, db *storage.PostgresStore, minio *storage.MinIOStore, retention int) {
+	streams, err := db.ListStreams(ctx)
+	if err != nil {
+		slog.Warn("cleanup: list streams", "error", err)
+		return
+	}
+	for _, s := range streams {
+		prefix := fmt.Sprintf("frames/%s/", s.ID.String())
+		keys, err := minio.ListObjects(ctx, prefix)
+		if err != nil {
+			slog.Warn("cleanup: list objects", "prefix", prefix, "error", err)
+			continue
+		}
+		if len(keys) <= retention {
+			continue
+		}
+		toDelete := keys[:len(keys)-retention]
+		if err := minio.DeleteObjects(ctx, toDelete); err != nil {
+			slog.Warn("cleanup: delete objects", "prefix", prefix, "error", err)
+			continue
+		}
+		slog.Info("cleanup: deleted old frames", "stream_id", s.ID, "deleted", len(toDelete), "remaining", retention)
+	}
+}
+
 func main() {
 	configPath := flag.String("config", "configs/config.yaml", "path to config file")
 	flag.Parse()
@@ -107,6 +132,23 @@ func main() {
 		os.Exit(1)
 	}
 	defer consumer.Close()
+
+	// Frame cleanup goroutine
+	if cfg.Storage.FrameRetention > 0 {
+		slog.Info("frame cleanup enabled", "retention", cfg.Storage.FrameRetention)
+		go func() {
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					cleanupFrames(ctx, db, minioStore, cfg.Storage.FrameRetention)
+				}
+			}
+		}()
+	}
 
 	// Metrics endpoint
 	go func() {

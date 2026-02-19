@@ -16,7 +16,12 @@ type Config struct {
 	MinIO    MinIOConfig    `yaml:"minio"`
 	Vision   VisionConfig   `yaml:"vision"`
 	Tracking TrackingConfig `yaml:"tracking"`
+	Storage  StorageConfig  `yaml:"storage"`
 	Logging  LoggingConfig  `yaml:"logging"`
+}
+
+type StorageConfig struct {
+	FrameRetention int `yaml:"frame_retention"` // keep last N frames per stream; 0 = keep all
 }
 
 type ServerConfig struct {

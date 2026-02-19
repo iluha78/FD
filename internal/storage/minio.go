@@ -78,6 +78,36 @@ func (s *MinIOStore) DeleteObject(ctx context.Context, key string) error {
 	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
 }
 
+// ListObjects returns all object keys under the given prefix, in the order MinIO returns them.
+func (s *MinIOStore) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+	var keys []string
+	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{
+		Prefix:    prefix,
+		Recursive: true,
+	}) {
+		if obj.Err != nil {
+			return nil, fmt.Errorf("list objects %s: %w", prefix, obj.Err)
+		}
+		keys = append(keys, obj.Key)
+	}
+	return keys, nil
+}
+
+// DeleteObjects removes multiple objects from MinIO in a single batch request.
+func (s *MinIOStore) DeleteObjects(ctx context.Context, keys []string) error {
+	objectsCh := make(chan minio.ObjectInfo, len(keys))
+	for _, key := range keys {
+		objectsCh <- minio.ObjectInfo{Key: key}
+	}
+	close(objectsCh)
+	for result := range s.client.RemoveObjects(ctx, s.bucket, objectsCh, minio.RemoveObjectsOptions{}) {
+		if result.Err != nil {
+			return fmt.Errorf("delete object %s: %w", result.ObjectName, result.Err)
+		}
+	}
+	return nil
+}
+
 // Ping checks MinIO connectivity.
 func (s *MinIOStore) Ping(ctx context.Context) error {
 	_, err := s.client.BucketExists(ctx, s.bucket)

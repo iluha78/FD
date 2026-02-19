@@ -412,6 +412,9 @@ tracking:
   max_age: 30                 # frames before losing a track
   min_hits: 3                 # min detections to confirm track
   re_recognize_interval: 3s   # re-run recognition per track
+
+storage:
+  frame_retention: 1000       # keep last N frames per stream in MinIO (0 = keep all)
 ```
 
 ## Web Interfaces
@@ -462,3 +465,20 @@ Outdated `attributes.go`. Ensure latest code with correct genderage output parsi
 
 **Face snapshots return 404**
 MinIO might be down or bucket missing. Check `docker ps` and MinIO console.
+
+**Disk fills up / MinIO growing too large**
+Frames accumulate in MinIO. Enable auto-cleanup in `configs/config.yaml`:
+```yaml
+storage:
+  frame_retention: 1000  # keep last 1000 frames per stream (0 = keep all)
+```
+Ingestor will purge oldest frames every 60 seconds automatically.
+
+**Detections stopped after disk was full / Docker crashed**
+NATS JetStream data files may be corrupted. Fix:
+```powershell
+docker compose -f deploy/docker-compose.yml down
+docker volume rm deploy_nats_data
+docker compose -f deploy/docker-compose.yml up -d
+# Then restart api.exe and worker.exe
+```

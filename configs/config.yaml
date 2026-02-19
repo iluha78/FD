@@ -37,6 +37,9 @@ tracking:
   min_hits: 3
   re_recognize_interval: 3s
 
+storage:
+  frame_retention: 1000  # keep last N frames per stream in MinIO (0 = keep all)
+
 logging:
   level: info
   format: json
