@@ -2,17 +2,34 @@ package vision
 
 import (
 	"fmt"
+	"image"
 	"math"
 
 	ort "github.com/yalue/onnxruntime_go"
 )
 
+const (
+	minAttributeFaceSize    = 40
+	minGenderConfidence     = 0.70
+	attributeAgeEMAAlpha    = 0.35
+	attributeSnapshotMinDim = 100
+)
+
 // GenderAge represents predicted gender and age attributes.
 type GenderAge struct {
-	Gender           string  // "male" or "female"
+	Gender           string  // "male" or "female"; may be empty if uncertain
 	GenderConfidence float32 // 0.0 to 1.0
 	Age              int
 	AgeRange         string // e.g. "30-35"
+}
+
+// AttributesModel is a common interface for gender/age predictors (genderage, MiVOLO, etc).
+type AttributesModel interface {
+	// Preprocess converts a face crop image to the model-specific input tensor (CHW float32).
+	Preprocess(img image.Image) []float32
+	Predict(faceData []float32) (*GenderAge, error)
+	InputSize() (int, int)
+	Close()
 }
 
 // AttributePredictor predicts gender and age using InsightFace genderage model.
@@ -36,7 +53,6 @@ func NewAttributePredictor(modelPath string, opts *ort.SessionOptions) (*Attribu
 		return nil, fmt.Errorf("create input tensor: %w", err)
 	}
 
-	// Output: [1, 3] — [female_logit, male_logit, age_normalized]
 	outputShape := ort.NewShape(1, 3)
 	outputTensor, err := ort.NewEmptyTensor[float32](outputShape)
 	if err != nil {
@@ -66,7 +82,6 @@ func NewAttributePredictor(modelPath string, opts *ort.SessionOptions) (*Attribu
 // Predict runs gender/age prediction on a face crop.
 // faceData should be CHW format [3, 96, 96], normalized.
 func (p *AttributePredictor) Predict(faceData []float32) (*GenderAge, error) {
-	// Copy input data into the input tensor
 	inputSlice := p.inputTensor.GetData()
 	copy(inputSlice, faceData)
 
@@ -74,33 +89,29 @@ func (p *AttributePredictor) Predict(faceData []float32) (*GenderAge, error) {
 		return nil, fmt.Errorf("run attributes: %w", err)
 	}
 
-	// Read output directly from the output tensor
 	data := p.outputTensor.GetData()
 	if len(data) < 3 {
 		return nil, fmt.Errorf("unexpected output size: %d", len(data))
 	}
 
-	// InsightFace genderage fc1 output = [female_logit, male_logit, age_normalized]
-	// fc1 is Concat of fullyconnected0 (gender, 2 classes) + fullyconnected1 (age, 1 value)
 	femaleLogit := data[0]
 	maleLogit := data[1]
 	ageNorm := data[2]
 
-	// Gender: argmax of first 2 logits
 	gender := "female"
 	if maleLogit > femaleLogit {
 		gender = "male"
 	}
 
-	// Confidence: softmax probability of the predicted class
-	// softmax(male) = 1 / (1 + exp(-(male - female)))
 	maleProbability := float32(1.0 / (1.0 + math.Exp(float64(-(maleLogit - femaleLogit)))))
 	genderConf := maleProbability
 	if gender == "female" {
 		genderConf = 1 - maleProbability
 	}
+	if genderConf < minGenderConfidence {
+		gender = ""
+	}
 
-	// Age: multiply by 100 to recover real age (InsightFace normalizes age/100 during training)
 	age := int(math.Round(float64(ageNorm) * 100))
 	if age < 0 {
 		age = 0
@@ -109,17 +120,33 @@ func (p *AttributePredictor) Predict(faceData []float32) (*GenderAge, error) {
 		age = 100
 	}
 
-	// Compute age range (±2.5 years bucket)
-	lower := (age / 5) * 5
-	upper := lower + 5
-	ageRange := fmt.Sprintf("%d-%d", lower, upper)
-
 	return &GenderAge{
 		Gender:           gender,
 		GenderConfidence: genderConf,
 		Age:              age,
-		AgeRange:         ageRange,
+		AgeRange:         ageRangeFor(age),
 	}, nil
+}
+
+func ageRangeFor(age int) string {
+	if age < 0 {
+		age = 0
+	}
+	if age > 100 {
+		age = 100
+	}
+	lower := (age / 5) * 5
+	upper := lower + 5
+	if upper > 100 {
+		upper = 100
+	}
+	return fmt.Sprintf("%d-%d", lower, upper)
+}
+
+// Preprocess converts a face crop to CHW float32 in RGB order, range [0, 255].
+// InsightFace genderage.onnx uses blobFromImage with swapRB=True (BGR→RGB), mean=0, std=1.
+func (p *AttributePredictor) Preprocess(img image.Image) []float32 {
+	return imageToFloat32CHW(img, p.inputW, p.inputH, [3]float32{0, 0, 0}, [3]float32{1, 1, 1})
 }
 
 // InputSize returns the expected face crop dimensions.

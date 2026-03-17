@@ -6,6 +6,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/your-org/fd/internal/api/handlers"
+	"github.com/your-org/fd/internal/api/live"
 	"github.com/your-org/fd/internal/api/ws"
 	"github.com/your-org/fd/internal/auth"
 	"github.com/your-org/fd/internal/queue"
@@ -13,11 +14,12 @@ import (
 )
 
 type RouterConfig struct {
-	APIKey   string
-	DB       *storage.PostgresStore
-	MinIO    *storage.MinIOStore
-	Producer *queue.Producer
-	Hub      *ws.Hub
+	APIKey     string
+	DB         *storage.PostgresStore
+	MinIO      *storage.MinIOStore
+	Producer   *queue.Producer
+	Hub        *ws.Hub
+	FrameCache *live.FrameCache
 	// EmbedFn extracts a face embedding from image bytes (from vision pipeline).
 	EmbedFn func(imageData []byte) ([]float32, float32, error)
 }
@@ -35,6 +37,11 @@ func NewRouter(cfg RouterConfig) *gin.Engine {
 	r.GET("/healthz", systemH.Healthz)
 	r.GET("/readyz", systemH.Readyz)
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
+	// Live viewer UI (no auth required for HTML page itself)
+	liveH := handlers.NewLiveHandler(cfg.FrameCache, cfg.MinIO, cfg.APIKey)
+	r.GET("/ui", liveH.UI)
+	r.GET("/", func(c *gin.Context) { c.Redirect(302, "/ui") })
 
 	// API v1 (with auth)
 	v1 := r.Group("/v1")
@@ -76,6 +83,9 @@ func NewRouter(cfg RouterConfig) *gin.Engine {
 	v1.GET("/events/:id/frame", eventH.Frame)
 	v1.GET("/events/similar", eventH.SimilarByTrack)
 	v1.POST("/search/events", eventH.SearchEvents)
+
+	// Live MJPEG stream (auth via header or ?api_key= query param)
+	v1.GET("/streams/:id/live", liveH.MJPEG)
 
 	return r
 }

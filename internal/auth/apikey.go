@@ -9,7 +9,8 @@ import (
 
 const headerName = "X-API-Key"
 
-// APIKeyMiddleware validates the API key from the X-API-Key header.
+// APIKeyMiddleware validates the API key from X-API-Key header or ?api_key= query param.
+// Query param support is required for browser WebSocket and MJPEG <img> tag usage.
 // If apiKey is empty, authentication is disabled.
 func APIKeyMiddleware(apiKey string) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -19,6 +20,9 @@ func APIKeyMiddleware(apiKey string) gin.HandlerFunc {
 		}
 
 		provided := c.GetHeader(headerName)
+		if provided == "" {
+			provided = c.Query("api_key")
+		}
 		if provided == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "missing API key",

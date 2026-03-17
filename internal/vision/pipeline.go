@@ -26,7 +26,9 @@ import (
 type Pipeline struct {
 	detector   *Detector
 	embedder   *Embedder
-	attributes *AttributePredictor
+	attributes AttributesModel
+	attrInputW int
+	attrInputH int
 	trackers   map[uuid.UUID]*Tracker // per-stream trackers
 	db         *storage.PostgresStore
 	minio      *storage.MinIOStore
@@ -46,8 +48,6 @@ func NewPipeline(
 
 	detPath := filepath.Join(cfg.ModelsDir, "det_10g.onnx")
 	embPath := filepath.Join(cfg.ModelsDir, "w600k_r50.onnx")
-	attrPath := filepath.Join(cfg.ModelsDir, "genderage.onnx")
-
 	// Build session options to cap ORT thread usage per model session.
 	// Each call to newSessionOptions() returns a fresh *ort.SessionOptions
 	// that must be destroyed after the session is created.
@@ -96,27 +96,28 @@ func NewPipeline(
 		return nil, fmt.Errorf("load embedder: %w", err)
 	}
 
-	slog.Info("loading attribute model", "path", attrPath)
 	attrOpts, err := newSessionOptions()
 	if err != nil {
 		det.Close()
 		emb.Close()
 		return nil, err
 	}
-	attr, err := NewAttributePredictor(attrPath, attrOpts)
+	attr, attrPath, err := newAttributesModel(cfg, attrOpts)
 	attrOpts.Destroy()
 	if err != nil {
 		det.Close()
 		emb.Close()
 		return nil, fmt.Errorf("load attributes: %w", err)
 	}
-
-	slog.Info("vision pipeline ready")
+	attrW, attrH := attr.InputSize()
+	slog.Info("loading attribute model", "path", attrPath, "input_w", attrW, "input_h", attrH)
 
 	return &Pipeline{
 		detector:   det,
 		embedder:   emb,
 		attributes: attr,
+		attrInputW: attrW,
+		attrInputH: attrH,
 		trackers:   make(map[uuid.UUID]*Tracker),
 		db:         db,
 		minio:      minio,
@@ -214,7 +215,7 @@ func (p *Pipeline) ProcessFrame(ctx context.Context, task models.FrameTask) erro
 
 		// 7. Predict gender/age
 		start = time.Now()
-		attrInput := preprocessForAttributes(faceCrop, p.attributes.inputW, p.attributes.inputH)
+		attrInput := p.attributes.Preprocess(faceCrop)
 		ga, err := p.attributes.Predict(attrInput)
 		if err != nil {
 			slog.Warn("attributes error", "error", err, "track", track.ID)
@@ -263,6 +264,8 @@ func (p *Pipeline) ProcessFrame(ctx context.Context, task models.FrameTask) erro
 			TrackID:          track.ID,
 			Timestamp:        task.Timestamp,
 			BBox:             track.BBox,
+			FrameWidth:       origW,
+			FrameHeight:      origH,
 			Gender:           track.Gender,
 			GenderConfidence: track.GenderConf,
 			Age:              track.FaceAge,
@@ -362,8 +365,61 @@ func preprocessForEmbedding(img image.Image, targetW, targetH int) []float32 {
 	return imageToFloat32CHW(img, targetW, targetH, [3]float32{127.5, 127.5, 127.5}, [3]float32{127.5, 127.5, 127.5})
 }
 
-func preprocessForAttributes(img image.Image, targetW, targetH int) []float32 {
-	return imageToFloat32CHW(img, targetW, targetH, [3]float32{0, 0, 0}, [3]float32{1, 1, 1})
+// imageToFloat32CHW_BGR is like imageToFloat32CHW but outputs channels in BGR order.
+// Used for models trained with OpenCV (InsightFace genderage, OpenVINO, etc).
+func imageToFloat32CHW_BGR(img image.Image, targetW, targetH int, mean, std [3]float32) []float32 {
+	data := make([]float32, 3*targetH*targetW)
+	planeSize := targetH * targetW
+
+	bounds := img.Bounds()
+	srcW := bounds.Dx()
+	srcH := bounds.Dy()
+	minX := bounds.Min.X
+	minY := bounds.Min.Y
+
+	switch src := img.(type) {
+	case *image.RGBA:
+		for y := 0; y < targetH; y++ {
+			srcY := minY + y*srcH/targetH
+			for x := 0; x < targetW; x++ {
+				srcX := minX + x*srcW/targetW
+				off := src.PixOffset(srcX, srcY)
+				pix := src.Pix[off : off+3 : off+3]
+				idx := y*targetW + x
+				// BGR: B=pix[2], G=pix[1], R=pix[0]
+				data[idx] = (float32(pix[2]) - mean[0]) / std[0]
+				data[planeSize+idx] = (float32(pix[1]) - mean[1]) / std[1]
+				data[2*planeSize+idx] = (float32(pix[0]) - mean[2]) / std[2]
+			}
+		}
+	case *image.YCbCr:
+		for y := 0; y < targetH; y++ {
+			srcY := minY + y*srcH/targetH
+			for x := 0; x < targetW; x++ {
+				srcX := minX + x*srcW/targetW
+				yi := src.YOffset(srcX, srcY)
+				ci := src.COffset(srcX, srcY)
+				r8, g8, b8 := color.YCbCrToRGB(src.Y[yi], src.Cb[ci], src.Cr[ci])
+				idx := y*targetW + x
+				data[idx] = (float32(b8) - mean[0]) / std[0]
+				data[planeSize+idx] = (float32(g8) - mean[1]) / std[1]
+				data[2*planeSize+idx] = (float32(r8) - mean[2]) / std[2]
+			}
+		}
+	default:
+		for y := 0; y < targetH; y++ {
+			srcY := minY + y*srcH/targetH
+			for x := 0; x < targetW; x++ {
+				srcX := minX + x*srcW/targetW
+				r, g, b, _ := img.At(srcX, srcY).RGBA()
+				idx := y*targetW + x
+				data[idx] = (float32(b>>8) - mean[0]) / std[0]
+				data[planeSize+idx] = (float32(g>>8) - mean[1]) / std[1]
+				data[2*planeSize+idx] = (float32(r>>8) - mean[2]) / std[2]
+			}
+		}
+	}
+	return data
 }
 
 // imageToFloat32CHW resizes img to targetW×targetH and converts to CHW float32
@@ -389,8 +445,8 @@ func imageToFloat32CHW(img image.Image, targetW, targetH int, mean, std [3]float
 				off := src.PixOffset(srcX, srcY)
 				pix := src.Pix[off : off+3 : off+3]
 				idx := y*targetW + x
-				data[idx] = (float32(pix[0]) - mean[0]) / std[0]           // R
-				data[planeSize+idx] = (float32(pix[1]) - mean[1]) / std[1] // G
+				data[idx] = (float32(pix[0]) - mean[0]) / std[0]             // R
+				data[planeSize+idx] = (float32(pix[1]) - mean[1]) / std[1]   // G
 				data[2*planeSize+idx] = (float32(pix[2]) - mean[2]) / std[2] // B
 			}
 		}

@@ -17,8 +17,12 @@ type Event struct {
 	AgeRange         string     `json:"age_range" db:"age_range"`
 	Confidence       float32    `json:"confidence" db:"confidence"`
 	Embedding        []float32  `json:"-" db:"embedding"`
+	BBox             [4]float32 `json:"bbox" db:"bbox"`                           // x1, y1, x2, y2 in pixels
+	FrameWidth       int        `json:"frame_width" db:"frame_width"`
+	FrameHeight      int        `json:"frame_height" db:"frame_height"`
 	MatchedPersonID  *uuid.UUID `json:"matched_person_id,omitempty" db:"matched_person_id"`
 	MatchScore       float32    `json:"match_score,omitempty" db:"match_score"`
+	MatchedName      string     `json:"matched_name,omitempty" db:"matched_name"` // populated via JOIN
 	SnapshotKey      string     `json:"snapshot_key" db:"snapshot_key"`
 	FrameKey         string     `json:"frame_key" db:"frame_key"` // MinIO key of the full frame
 	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
@@ -40,7 +44,9 @@ type DetectionResult struct {
 	StreamID         uuid.UUID  `json:"stream_id"`
 	TrackID          string     `json:"track_id"`
 	Timestamp        time.Time  `json:"timestamp"`
-	BBox             [4]float32 `json:"bbox"` // x1, y1, x2, y2
+	BBox             [4]float32 `json:"bbox"` // x1, y1, x2, y2 in pixels
+	FrameWidth       int        `json:"frame_width"`
+	FrameHeight      int        `json:"frame_height"`
 	Gender           string     `json:"gender"`
 	GenderConfidence float32    `json:"gender_confidence"`
 	Age              int        `json:"age"`

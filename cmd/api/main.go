@@ -18,6 +18,7 @@ import (
 	ort "github.com/yalue/onnxruntime_go"
 
 	"github.com/your-org/fd/internal/api"
+	"github.com/your-org/fd/internal/api/live"
 	"github.com/your-org/fd/internal/api/ws"
 	"github.com/your-org/fd/internal/config"
 	"github.com/your-org/fd/internal/models"
@@ -76,6 +77,9 @@ func main() {
 	hub := ws.NewHub()
 	go hub.Run()
 
+	// Frame cache for live MJPEG streaming
+	frameCache := live.NewFrameCache()
+
 	// Start event consumer to broadcast events via WebSocket
 	consumer, err := queue.NewConsumer(cfg.NATS.URL)
 	if err != nil {
@@ -104,6 +108,9 @@ func main() {
 			AgeRange:         result.AgeRange,
 			Confidence:       result.Confidence,
 			Embedding:        result.Embedding,
+			BBox:             result.BBox,
+			FrameWidth:       result.FrameWidth,
+			FrameHeight:      result.FrameHeight,
 			MatchedPersonID:  result.MatchedPersonID,
 			MatchScore:       result.MatchScore,
 			SnapshotKey:      result.SnapshotKey,
@@ -113,30 +120,54 @@ func main() {
 			slog.Error("store event", "error", err)
 		}
 
+		// Update frame cache for live MJPEG viewers
+		if result.FrameKey != "" {
+			frameCache.Update(result.StreamID, result.FrameKey, result.FrameWidth, result.FrameHeight)
+		}
+
+		// Look up matched person name (one extra query only when there's a match)
+		var matchedName string
+		if result.MatchedPersonID != nil {
+			if person, err := db.GetPerson(ctx, *result.MatchedPersonID); err == nil && person != nil {
+				matchedName = person.Name
+			}
+		}
+
 		// Broadcast via WebSocket
 		evtType := "face_detected"
 		if result.MatchedPersonID != nil {
 			evtType = "face_recognized"
 		}
 
+		evResp := dto.EventResponse{
+			ID:               event.ID,
+			StreamID:         event.StreamID,
+			TrackID:          event.TrackID,
+			Timestamp:        event.Timestamp.Format(time.RFC3339),
+			Gender:           event.Gender,
+			GenderConfidence: event.GenderConfidence,
+			Age:              event.Age,
+			AgeRange:         event.AgeRange,
+			Confidence:       event.Confidence,
+			MatchedPersonID:  event.MatchedPersonID,
+			MatchedName:      matchedName,
+			MatchScore:       event.MatchScore,
+			CreatedAt:        event.CreatedAt.Format(time.RFC3339),
+		}
+		if event.SnapshotKey != "" {
+			evResp.SnapshotURL = "/v1/events/" + event.ID.String() + "/snapshot"
+		}
+		if event.FrameKey != "" {
+			evResp.FrameURL = "/v1/events/" + event.ID.String() + "/frame"
+		}
+
 		hub.BroadcastEvent(&dto.WSEvent{
-			Type:     evtType,
-			StreamID: result.StreamID,
-			Data: dto.EventResponse{
-				ID:               event.ID,
-				StreamID:         event.StreamID,
-				TrackID:          event.TrackID,
-				Timestamp:        event.Timestamp.Format(time.RFC3339),
-				Gender:           event.Gender,
-				GenderConfidence: event.GenderConfidence,
-				Age:              event.Age,
-				AgeRange:         event.AgeRange,
-				Confidence:       event.Confidence,
-				MatchedPersonID:  event.MatchedPersonID,
-				MatchScore:       event.MatchScore,
-				SnapshotURL:      "/v1/events/" + event.ID.String() + "/snapshot",
-				CreatedAt:        event.CreatedAt.Format(time.RFC3339),
-			},
+			Type:        evtType,
+			StreamID:    result.StreamID,
+			BBox:        result.BBox[:],
+			FrameWidth:  result.FrameWidth,
+			FrameHeight: result.FrameHeight,
+			Data:        evResp,
 		})
 
 		return nil
@@ -165,21 +196,23 @@ func main() {
 
 	// Setup router
 	router := api.NewRouter(api.RouterConfig{
-		APIKey:   cfg.Server.APIKey,
-		DB:       db,
-		MinIO:    minioStore,
-		Producer: producer,
-		Hub:      hub,
-		EmbedFn:  embedFn,
+		APIKey:     cfg.Server.APIKey,
+		DB:         db,
+		MinIO:      minioStore,
+		Producer:   producer,
+		Hub:        hub,
+		EmbedFn:    embedFn,
+		FrameCache: frameCache,
 	})
 
 	// Start HTTP server
+	// WriteTimeout is 0 to support long-lived MJPEG streaming connections.
 	srv := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler:      router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:        fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler:     router,
+		ReadTimeout: 30 * time.Second,
+		WriteTimeout: 0,
+		IdleTimeout: 60 * time.Second,
 	}
 
 	go func() {

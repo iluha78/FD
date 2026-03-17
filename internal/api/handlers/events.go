@@ -77,8 +77,14 @@ func (h *EventHandler) List(c *gin.Context) {
 			AgeRange:         ev.AgeRange,
 			Confidence:       ev.Confidence,
 			MatchedPersonID:  ev.MatchedPersonID,
+			MatchedName:      ev.MatchedName,
 			MatchScore:       ev.MatchScore,
 			CreatedAt:        ev.CreatedAt.Format(time.RFC3339),
+		}
+		if ev.BBox[2] > 0 {
+			r.BBox = ev.BBox[:]
+			r.FrameWidth = ev.FrameWidth
+			r.FrameHeight = ev.FrameHeight
 		}
 		if ev.SnapshotKey != "" {
 			r.SnapshotURL = "/v1/events/" + ev.ID.String() + "/snapshot"

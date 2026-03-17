@@ -12,6 +12,9 @@ type EventResponse struct {
 	Age              int        `json:"age"`
 	AgeRange         string     `json:"age_range"`
 	Confidence       float32    `json:"confidence"`
+	BBox             []float32  `json:"bbox,omitempty"`        // [x1,y1,x2,y2] in pixels
+	FrameWidth       int        `json:"frame_width,omitempty"`
+	FrameHeight      int        `json:"frame_height,omitempty"`
 	MatchedPersonID  *uuid.UUID `json:"matched_person_id,omitempty"`
 	MatchedName      string     `json:"matched_name,omitempty"`
 	MatchScore       float32    `json:"match_score,omitempty"`
@@ -50,8 +53,11 @@ type EventSearchResult struct {
 
 // WSEvent is a WebSocket message for real-time event delivery.
 type WSEvent struct {
-	Type     string        `json:"type"` // face_detected, face_recognized, stream_status
-	StreamID uuid.UUID     `json:"stream_id"`
-	Data     EventResponse `json:"data,omitempty"`
-	Status   string        `json:"status,omitempty"`
+	Type        string        `json:"type"` // face_detected, face_recognized, stream_status
+	StreamID    uuid.UUID     `json:"stream_id"`
+	Data        EventResponse `json:"data,omitempty"`
+	Status      string        `json:"status,omitempty"`
+	BBox        []float32     `json:"bbox,omitempty"`         // [x1,y1,x2,y2] in pixels
+	FrameWidth  int           `json:"frame_width,omitempty"`
+	FrameHeight int           `json:"frame_height,omitempty"`
 }

@@ -422,11 +422,12 @@ func (s *PostgresStore) CreateEvent(ctx context.Context, ev *models.Event) error
 		vec = &v
 	}
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO events (id, stream_id, track_id, timestamp, gender, gender_confidence, age, age_range, confidence, embedding, matched_person_id, match_score, snapshot_key, frame_key, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		`INSERT INTO events (id, stream_id, track_id, timestamp, gender, gender_confidence, age, age_range, confidence, embedding, bbox_x1, bbox_y1, bbox_x2, bbox_y2, frame_width, frame_height, matched_person_id, match_score, snapshot_key, frame_key, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
 		ev.ID, ev.StreamID, ev.TrackID, ev.Timestamp,
 		ev.Gender, ev.GenderConfidence, ev.Age, ev.AgeRange, ev.Confidence,
-		vec, ev.MatchedPersonID, ev.MatchScore, ev.SnapshotKey, ev.FrameKey, ev.CreatedAt)
+		vec, ev.BBox[0], ev.BBox[1], ev.BBox[2], ev.BBox[3], ev.FrameWidth, ev.FrameHeight,
+		ev.MatchedPersonID, ev.MatchScore, ev.SnapshotKey, ev.FrameKey, ev.CreatedAt)
 	return err
 }
 
@@ -438,40 +439,47 @@ func (s *PostgresStore) QueryEvents(ctx context.Context, streamID uuid.UUID, fro
 		limit = 500
 	}
 
-	baseWhere := "WHERE stream_id = $1"
+	baseWhere := "WHERE e.stream_id = $1"
 	args := []interface{}{streamID}
 	argIdx := 2
 
 	if from != nil {
-		baseWhere += fmt.Sprintf(" AND timestamp >= $%d", argIdx)
+		baseWhere += fmt.Sprintf(" AND e.timestamp >= $%d", argIdx)
 		args = append(args, *from)
 		argIdx++
 	}
 	if to != nil {
-		baseWhere += fmt.Sprintf(" AND timestamp <= $%d", argIdx)
+		baseWhere += fmt.Sprintf(" AND e.timestamp <= $%d", argIdx)
 		args = append(args, *to)
 		argIdx++
 	}
 	if personID != nil {
-		baseWhere += fmt.Sprintf(" AND matched_person_id = $%d", argIdx)
+		baseWhere += fmt.Sprintf(" AND e.matched_person_id = $%d", argIdx)
 		args = append(args, *personID)
 		argIdx++
 	}
 	if unknown != nil && *unknown {
-		baseWhere += " AND matched_person_id IS NULL"
+		baseWhere += " AND e.matched_person_id IS NULL"
 	}
 
 	// Count total
 	var total int
-	countQuery := "SELECT COUNT(*) FROM events " + baseWhere
+	countQuery := "SELECT COUNT(*) FROM events e " + baseWhere
 	if err := s.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count events: %w", err)
 	}
 
-	// Fetch page
+	// Fetch page with person name via LEFT JOIN
 	query := fmt.Sprintf(
-		`SELECT id, stream_id, track_id, timestamp, gender, gender_confidence, age, age_range, confidence, matched_person_id, match_score, snapshot_key, frame_key, created_at
-		 FROM events %s ORDER BY timestamp DESC LIMIT $%d OFFSET $%d`,
+		`SELECT e.id, e.stream_id, e.track_id, e.timestamp,
+		        e.gender, e.gender_confidence, e.age, e.age_range, e.confidence,
+		        e.matched_person_id, e.match_score,
+		        e.bbox_x1, e.bbox_y1, e.bbox_x2, e.bbox_y2, e.frame_width, e.frame_height,
+		        COALESCE(p.name, '') AS matched_name,
+		        e.snapshot_key, e.frame_key, e.created_at
+		 FROM events e
+		 LEFT JOIN persons p ON p.id = e.matched_person_id
+		 %s ORDER BY e.timestamp DESC LIMIT $%d OFFSET $%d`,
 		baseWhere, argIdx, argIdx+1)
 	args = append(args, limit, offset)
 
@@ -486,7 +494,9 @@ func (s *PostgresStore) QueryEvents(ctx context.Context, streamID uuid.UUID, fro
 		var ev models.Event
 		if err := rows.Scan(&ev.ID, &ev.StreamID, &ev.TrackID, &ev.Timestamp,
 			&ev.Gender, &ev.GenderConfidence, &ev.Age, &ev.AgeRange, &ev.Confidence,
-			&ev.MatchedPersonID, &ev.MatchScore, &ev.SnapshotKey, &ev.FrameKey, &ev.CreatedAt); err != nil {
+			&ev.MatchedPersonID, &ev.MatchScore,
+			&ev.BBox[0], &ev.BBox[1], &ev.BBox[2], &ev.BBox[3], &ev.FrameWidth, &ev.FrameHeight,
+			&ev.MatchedName, &ev.SnapshotKey, &ev.FrameKey, &ev.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan event: %w", err)
 		}
 		events = append(events, ev)
@@ -516,12 +526,24 @@ func (s *PostgresStore) GetEmbeddingByTrackID(ctx context.Context, streamID uuid
 func (s *PostgresStore) GetEvent(ctx context.Context, id uuid.UUID) (*models.Event, error) {
 	var ev models.Event
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, stream_id, track_id, timestamp, gender, gender_confidence, age, age_range, confidence, matched_person_id, match_score, snapshot_key, frame_key, created_at
-		 FROM events WHERE id = $1`, id).
+		`SELECT e.id, e.stream_id, e.track_id, e.timestamp,
+		        e.gender, e.gender_confidence, e.age, e.age_range, e.confidence,
+		        e.matched_person_id, e.match_score,
+		        e.bbox_x1, e.bbox_y1, e.bbox_x2, e.bbox_y2, e.frame_width, e.frame_height,
+		        COALESCE(p.name, '') AS matched_name,
+		        e.snapshot_key, e.frame_key, e.created_at
+		 FROM events e
+		 LEFT JOIN persons p ON p.id = e.matched_person_id
+		 WHERE e.id = $1`, id).
 		Scan(&ev.ID, &ev.StreamID, &ev.TrackID, &ev.Timestamp,
 			&ev.Gender, &ev.GenderConfidence, &ev.Age, &ev.AgeRange, &ev.Confidence,
-			&ev.MatchedPersonID, &ev.MatchScore, &ev.SnapshotKey, &ev.FrameKey, &ev.CreatedAt)
+			&ev.MatchedPersonID, &ev.MatchScore,
+			&ev.BBox[0], &ev.BBox[1], &ev.BBox[2], &ev.BBox[3], &ev.FrameWidth, &ev.FrameHeight,
+			&ev.MatchedName, &ev.SnapshotKey, &ev.FrameKey, &ev.CreatedAt)
 	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("get event: %w", err)
 	}
 	return &ev, nil

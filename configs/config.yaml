@@ -28,8 +28,8 @@ vision:
   max_fps: 10
   worker_count: 6
   frame_width: 1920
-  min_face_size: 20
-  intra_op_threads: 2   # ORT threads per op per session (6 workers × 3 models × 2 = 36 max)
+  min_face_size: 40
+  intra_op_threads: 2   # ORT threads per op per session
   inter_op_threads: 1   # ORT threads between ops per session
 
 tracking:

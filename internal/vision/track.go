@@ -12,17 +12,21 @@ type Track struct {
 	ID              string
 	BBox            [4]float32
 	Confidence      float32
-	Age             int           // frames since creation
-	Hits            int           // number of consecutive detections
-	TimeSinceUpdate int           // frames since last detection match
-	Embedding       []float32     // last known embedding
-	LastRecognized  time.Time     // last time recognition was run
-	PersonID        string        // matched person ID, if any
-	MatchScore      float32       // match score
+	Age             int       // frames since creation
+	Hits            int       // number of consecutive detections
+	TimeSinceUpdate int       // frames since last detection match
+	Embedding       []float32 // last known embedding
+	LastRecognized  time.Time // last time recognition was run
+	PersonID        string    // matched person ID, if any
+	MatchScore      float32   // match score
 	Gender          string
 	GenderConf      float32
 	FaceAge         int
 	AgeRange        string
+	AgeEMA          float32
+	AgeSamples      int
+	GenderMaleScore float32
+	GenderSamples   int
 }
 
 // Tracker implements a simple SORT-like face tracker.
@@ -94,8 +98,9 @@ func (t *Tracker) Update(detections []Detection) []TrackUpdate {
 			detMatched[di] = true
 
 			updates = append(updates, TrackUpdate{
-				Track: tr,
-				IsNew: false,
+				Track:     tr,
+				IsNew:     false,
+				Detection: det,
 			})
 		}
 	}
@@ -118,8 +123,9 @@ func (t *Tracker) Update(detections []Detection) []TrackUpdate {
 		t.tracks[trackID] = tr
 
 		updates = append(updates, TrackUpdate{
-			Track: tr,
-			IsNew: true,
+			Track:     tr,
+			IsNew:     true,
+			Detection: det,
 		})
 	}
 
@@ -152,8 +158,9 @@ func (t *Tracker) TrackCount() int {
 }
 
 type TrackUpdate struct {
-	Track *Track
-	IsNew bool
+	Track     *Track
+	IsNew     bool
+	Detection Detection
 }
 
 // CosineSimilarity computes cosine similarity between two normalized vectors.
